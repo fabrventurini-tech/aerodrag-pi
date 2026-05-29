@@ -113,7 +113,7 @@ function sessionEnd(deviceId) {
   const filename = `session_${startTs}_${safeId || 'unknown'}.json`;
   const json     = JSON.stringify({ ts:startTs, deviceId, athleteName, laps:lapData }, null, 2);
   fs.writeFile(path.join(SESSIONS_DIR, filename), json, err => {
-    if (err) { console.error('[pi] Errore salvataggio:', err.message); return; }
+    if (err) { console.error('[pi] Errore salvataggio:', err.message); sessions.delete(deviceId); return; }
     console.log(`[pi] Sessione salvata: ${athleteName} → ${filename}`);
     sendToPc(filename, json, ok => { if (!ok) pendingAdd(filename); });
   });
@@ -257,8 +257,8 @@ function broadcast(msg) {
 }
 
 wss.on('connection', (ws, req) => {
-  const url = req.url || '/';
-  const ip  = req.socket.remoteAddress;
+  const url      = req.url || '/';
+  const ip       = req.socket.remoteAddress;
 
   if (url === '/coach' || url === '/device') {
     // ── Device (app atleta) ──
@@ -269,7 +269,7 @@ wss.on('connection', (ws, req) => {
         const frame = JSON.parse(raw.toString());
         if (frame.type === 'hello') {
           // hello: { type:'hello', device:'AA:BB:...', athlete:'Mario' }
-          const devId = frame.device || ws._socket.remoteAddress;
+          const devId = frame.device || ip;
           const name  = frame.athlete || 'Atleta';
           deviceWsMap.set(ws, { deviceId: devId, athleteName: name });
           sessionStart(devId, name);
