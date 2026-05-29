@@ -1,0 +1,16 @@
+{
+  "name": "aerodrag-pi-server",
+  "version": "1.0.0",
+  "description": "AeroDrag Coach Server — Raspberry Pi Zero 2W",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "install-service": "sudo bash ../setup/setup.sh"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

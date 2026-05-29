@@ -1,0 +1,10 @@
+{
+  "name": "aerodrag-pc-receiver",
+  "version": "1.0.0",
+  "description": "AeroDrag — riceve sessioni dal Pi e le salva sul PC",
+  "main": "pc-receiver.js",
+  "scripts": {
+    "start": "node pc-receiver.js"
+  },
+  "engines": { "node": ">=18.0.0" }
+}
