@@ -22,6 +22,14 @@ WIFI_PASS="aerodrag2024"
 USB_IP="192.168.7.1"
 WIFI_IP="192.168.8.1"
 
+# Raspberry Pi OS Bookworm sposta i file di boot in /boot/firmware/
+# Bullseye e precedenti usano /boot/ direttamente.
+if [ -d /boot/firmware ]; then
+    BOOT_DIR="/boot/firmware"
+else
+    BOOT_DIR="/boot"
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  AeroDrag Pi Setup v1.0"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -35,9 +43,9 @@ apt-get install -y -qq nodejs npm hostapd dnsmasq git
 # Il Pi si presenta al PC come adattatore di rete USB (RNDIS/CDC Ethernet)
 echo "[2/8] Configurazione USB Ethernet gadget..."
 
-# Abilita dwc2 overlay in /boot/config.txt
-if ! grep -q "dtoverlay=dwc2" /boot/config.txt; then
-    echo "dtoverlay=dwc2" >> /boot/config.txt
+# Abilita dwc2 overlay in config.txt (Bookworm: /boot/firmware, Bullseye: /boot)
+if ! grep -q "dtoverlay=dwc2" "${BOOT_DIR}/config.txt"; then
+    echo "dtoverlay=dwc2" >> "${BOOT_DIR}/config.txt"
 fi
 
 # Carica il modulo g_ether al boot
@@ -46,8 +54,8 @@ if ! grep -q "g_ether" /etc/modules; then
 fi
 
 # Aggiungi dwc2 a cmdline.txt (prima di rootwait)
-if ! grep -q "modules-load=dwc2" /boot/cmdline.txt; then
-    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' /boot/cmdline.txt
+if ! grep -q "modules-load=dwc2" "${BOOT_DIR}/cmdline.txt"; then
+    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "${BOOT_DIR}/cmdline.txt"
 fi
 
 # Configurazione IP statico per usb0 (interfaccia gadget)
@@ -84,7 +92,7 @@ ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase=${WIFI_PASS}
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
+wpa_pairwise=CCMP
 rsn_pairwise=CCMP
 EOF
 
