@@ -75,7 +75,9 @@ function sessionAddFrame(frame) {
   if (lp.n % 5 === 0 && lp.pts.length < 2000)   // cap a 2000 pt/lap (~16min a 2pt/s)
     lp.pts.push({ s:Math.round((frame.t-lp.startTs)/1000),
       CdA:+frame.CdA.toFixed(4), pwr:frame.pwr||0, spd:+(frame.spd||0).toFixed(1),
-      hr:frame.hr||0, wind:+(frame.wind||0).toFixed(2), cad:frame.cad||0 });
+      hr:frame.hr||0, wind:+(frame.wind||0).toFixed(2), cad:frame.cad||0,
+      pitch:+(frame.pitch||0).toFixed(2), rho:+(frame.rho||0).toFixed(4),
+      pctAero:frame.pctAero||0, battery:frame.battery||0 });
   sess.frameCount++;
 }
 
@@ -225,6 +227,22 @@ const httpServer = http.createServer((req, res) => {
     } catch { res.writeHead(500); return res.end('[]'); }
   }
 
+  // OTA firmware: l'ESP32 scarica il binario da questo endpoint
+  // Il file fw.bin va copiato in /home/pi/aerodrag/fw.bin prima di inviare il cmd ota
+  if (url === '/fw.bin') {
+    const fwPath = path.join(__dirname, 'fw.bin');
+    try {
+      const stat = fs.statSync(fwPath);
+      res.writeHead(200, {
+        'Content-Type':   'application/octet-stream',
+        'Content-Length': stat.size,
+      });
+      return fs.createReadStream(fwPath).pipe(res);
+    } catch {
+      res.writeHead(404); return res.end('fw.bin non trovato');
+    }
+  }
+
   const m = url.match(/^\/api\/sessions\/(.+)$/);
   if (m) {
     // Fix S2: valida pattern session_DDDDDDDD_HEX prima di path.join — previene path traversal
@@ -268,12 +286,13 @@ wss.on('connection', (ws, req) => {
       try {
         const frame = JSON.parse(raw.toString());
         if (frame.type === 'hello') {
-          // hello: { type:'hello', device:'AA:BB:...', athlete:'Mario' }
+          // hello: { type:'hello', device:'AA:BB:...', athlete:'Mario', fw:'1.3.0' }
           const devId = frame.device || ip;
           const name  = frame.athlete || 'Atleta';
-          deviceWsMap.set(ws, { deviceId: devId, athleteName: name });
+          const fw    = frame.fw || '';
+          deviceWsMap.set(ws, { deviceId: devId, athleteName: name, fw });
           sessionStart(devId, name);
-          broadcast({ type:'device_connected', deviceId:devId, athleteName:name, ip });
+          broadcast({ type:'device_connected', deviceId:devId, athleteName:name, fw, ip });
           // Notifica lista atleti connessi
           broadcast({ type:'athletes', list:[...deviceWsMap.values()] });
           return;
@@ -286,6 +305,10 @@ wss.on('connection', (ws, req) => {
 
         frameCount++;
         sessionAddFrame(frame);
+        // lapEvent:true → notifica la dashboard del cambio lap (l'ESP32 lo manda una sola volta)
+        if (frame.lapEvent === true) {
+          broadcast({ type:'lap_event', deviceId:frame.device, lap:frame.lap });
+        }
         lastFrameByDevice.set(frame.device, frame);
 
         const json = JSON.stringify(frame);
@@ -325,13 +348,19 @@ wss.on('connection', (ws, req) => {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'cmd') {
-          if (!['lap','start','stop'].includes(msg.action)) return;
+          if (!['lap','start','stop','ota'].includes(msg.action)) return;
+          // ota richiede url
+          if (msg.action === 'ota' && !msg.url) {
+            ws.send(JSON.stringify({ type:'cmd_error', reason:'ota_missing_url' })); return;
+          }
           const targetDevId = msg.deviceId;   // può essere undefined = broadcast a tutti
+          const payload = { type:'cmd', action:msg.action };
+          if (msg.action === 'ota') payload.url = msg.url;
           let sent = 0;
           deviceWsMap.forEach((info, devWs) => {
             if (!targetDevId || info.deviceId === targetDevId) {
               if (devWs.readyState === 1) {
-                devWs.send(JSON.stringify({ type:'cmd', action:msg.action }));
+                devWs.send(JSON.stringify(payload));
                 sent++;
               }
             }
