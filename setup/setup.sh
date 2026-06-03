@@ -39,33 +39,137 @@ echo "[1/8] Aggiornamento sistema..."
 apt-get update -qq
 apt-get install -y -qq nodejs npm hostapd dnsmasq git
 
-# ── 2. USB Ethernet gadget (g_ether) ─────────────────────────────────────────
-# Il Pi si presenta al PC come adattatore di rete USB (RNDIS/CDC Ethernet)
-echo "[2/8] Configurazione USB Ethernet gadget..."
+# ── 2. USB Ethernet gadget (RNDIS plug-and-play) ─────────────────────────────
+# Usa configfs + Microsoft OS Descriptors → Windows installa il driver RNDIS
+# automaticamente senza intervento dell'utente (plug-and-play).
+echo "[2/8] Configurazione USB Ethernet gadget (plug-and-play)..."
 
-# Abilita dwc2 overlay in config.txt (Bookworm: /boot/firmware, Bullseye: /boot)
-if ! grep -q "dtoverlay=dwc2" "${BOOT_DIR}/config.txt"; then
-    echo "dtoverlay=dwc2" >> "${BOOT_DIR}/config.txt"
+# Abilita dwc2 in modalità peripheral nel config.txt
+# Rimuove eventuali righe dwc2 precedenti e aggiunge quella corretta
+sed -i '/dtoverlay=dwc2/d' "${BOOT_DIR}/config.txt"
+# Inserisce dtoverlay=dwc2,dr_mode=peripheral nella sezione [all]
+# (o in fondo al file se [all] non c'è)
+if grep -q "^\[all\]" "${BOOT_DIR}/config.txt"; then
+    sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=peripheral' "${BOOT_DIR}/config.txt"
+else
+    echo "dtoverlay=dwc2,dr_mode=peripheral" >> "${BOOT_DIR}/config.txt"
 fi
+# Disabilita otg_mode=1 (presente nel template Bookworm per CM4, blocca il gadget)
+sed -i 's/^otg_mode=1/#otg_mode=1/' "${BOOT_DIR}/config.txt"
 
-# Carica il modulo g_ether al boot
-if ! grep -q "g_ether" /etc/modules; then
-    echo "g_ether" >> /etc/modules
-fi
+# Rimuove modules-load dal cmdline (non funziona su tutti i kernel RPi)
+sed -i 's/ modules-load=dwc2,g_ether//' "${BOOT_DIR}/cmdline.txt"
+# Rimuove eventuale artefatto ds=nocloud lasciato dall'Imager
+sed -i 's/ ds=nocloud;i=rpi-imager-[^ ]*//' "${BOOT_DIR}/cmdline.txt"
 
-# Aggiungi dwc2 a cmdline.txt (prima di rootwait)
-if ! grep -q "modules-load=dwc2" "${BOOT_DIR}/cmdline.txt"; then
-    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "${BOOT_DIR}/cmdline.txt"
-fi
-
-# Configurazione IP statico per usb0 (interfaccia gadget)
-cat > /etc/network/interfaces.d/usb0 << EOF
-auto usb0
-allow-hotplug usb0
-iface usb0 inet static
-    address ${USB_IP}
-    netmask 255.255.255.0
+# Carica dwc2 e libcomposite al boot tramite modules-load.d (metodo corretto)
+cat > /etc/modules-load.d/aerodrag-usb.conf << 'EOF'
+dwc2
+libcomposite
 EOF
+
+# Script gadget USB con Microsoft OS Descriptors per plug-and-play su Windows
+cat > /usr/local/bin/aerodrag-usb-gadget.sh << GADGET_EOF
+#!/bin/bash
+# Crea gadget USB RNDIS con Microsoft OS Descriptors
+# Windows riconosce automaticamente il dispositivo senza driver aggiuntivi.
+
+GADGET_DIR=/sys/kernel/config/usb_gadget/aerodrag
+
+# Attendi che configfs sia disponibile
+for i in \$(seq 1 10); do
+    [ -d /sys/kernel/config/usb_gadget ] && break
+    sleep 1
+done
+[ -d /sys/kernel/config/usb_gadget ] || { echo "configfs non disponibile"; exit 1; }
+
+# Rimuovi gadget precedente se esiste
+if [ -d "\$GADGET_DIR" ]; then
+    echo "" > "\$GADGET_DIR/UDC" 2>/dev/null || true
+    rm -f "\$GADGET_DIR/configs/c.1/rndis.usb0" 2>/dev/null || true
+    rmdir "\$GADGET_DIR/configs/c.1/strings/0x409" 2>/dev/null || true
+    rmdir "\$GADGET_DIR/configs/c.1" 2>/dev/null || true
+    rmdir "\$GADGET_DIR/functions/rndis.usb0" 2>/dev/null || true
+    rmdir "\$GADGET_DIR/strings/0x409" 2>/dev/null || true
+    rmdir "\$GADGET_DIR" 2>/dev/null || true
+fi
+
+mkdir -p "\$GADGET_DIR"
+cd "\$GADGET_DIR"
+
+# VID/PID compatibili RNDIS (Linux Foundation)
+echo 0x1d6b > idVendor
+echo 0x0104 > idProduct
+echo 0x0200 > bcdDevice
+echo 0x0200 > bcdUSB
+
+# Microsoft OS Descriptors — dicono a Windows di usare il driver RNDIS built-in
+# senza richiedere installazione manuale del driver
+echo 1          > os_desc/use
+echo 0xcd       > os_desc/b_vendor_code
+echo "MSFT100"  > os_desc/qw_sign
+
+mkdir -p strings/0x409
+echo "AeroDrag"    > strings/0x409/manufacturer
+echo "AeroDrag Pi" > strings/0x409/product
+echo "aerodrag01"  > strings/0x409/serialnumber
+
+mkdir -p configs/c.1/strings/0x409
+echo "RNDIS"  > configs/c.1/strings/0x409/configuration
+echo 250       > configs/c.1/MaxPower
+echo 0x80      > configs/c.1/bmAttributes
+
+mkdir -p functions/rndis.usb0
+# OS descriptor per RNDIS: Windows usa questo per auto-installare il driver
+echo "RNDIS"   > functions/rndis.usb0/os_desc/interface.rndis/compatible_id
+echo "5162001" > functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id
+
+ln -sf "\$GADGET_DIR/functions/rndis.usb0" "\$GADGET_DIR/configs/c.1/"
+ln -sf "\$GADGET_DIR/configs/c.1" "\$GADGET_DIR/os_desc/"
+
+# Attendi UDC
+UDC=\$(ls /sys/class/udc/ 2>/dev/null | head -1)
+for i in \$(seq 1 10); do
+    [ -n "\$UDC" ] && break
+    sleep 1
+    UDC=\$(ls /sys/class/udc/ 2>/dev/null | head -1)
+done
+[ -z "\$UDC" ] && { echo "UDC non trovato"; exit 1; }
+
+echo "\$UDC" > UDC
+echo "Gadget USB RNDIS attivo su \$UDC"
+GADGET_EOF
+chmod +x /usr/local/bin/aerodrag-usb-gadget.sh
+
+# Servizio systemd per il gadget USB (parte prima del network)
+cat > /etc/systemd/system/aerodrag-usb-gadget.service << EOF
+[Unit]
+Description=AeroDrag USB RNDIS Gadget
+After=sys-kernel-config.mount
+Before=network-pre.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/aerodrag-usb-gadget.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable aerodrag-usb-gadget
+
+# IP statico su usb0 tramite systemd-networkd (più affidabile di interfaces.d)
+mkdir -p /etc/systemd/network
+cat > /etc/systemd/network/usb0.network << EOF
+[Match]
+Name=usb0
+
+[Network]
+Address=${USB_IP}/24
+EOF
+systemctl enable systemd-networkd
 
 # ── 3. DHCP su USB (per il PC coach) ─────────────────────────────────────────
 echo "[3/8] Configurazione DHCP USB..."
