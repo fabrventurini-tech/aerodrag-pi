@@ -303,6 +303,12 @@ wss.on('connection', (ws, req) => {
         frame.device  = frame.device  || devInfo.deviceId;
         frame.athlete = frame.athlete || devInfo.athleteName;
 
+        // Aggiorna il nome se l'app lo ha impostato dopo il hello
+        if (frame.athlete && frame.athlete !== devInfo.athleteName && devInfo !== null) {
+          devInfo.athleteName = frame.athlete;
+          broadcast({ type:'athlete_update', deviceId:devInfo.deviceId, athleteName:frame.athlete });
+        }
+
         frameCount++;
         sessionAddFrame(frame);
         // lapEvent:true → notifica la dashboard del cambio lap (l'ESP32 lo manda una sola volta)
