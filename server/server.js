@@ -395,7 +395,8 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`  AeroDrag Coach Server v4 — multi-atleta`);
   console.log(`  Porta: ${PORT}  |  Sessioni in coda: ${pending.length}`);
-  console.log(`  App atleta:  ws://${WIFI_IP}:${PORT}/coach`);
+  console.log(`  ESP32:       ws://${WIFI_IP}:${PORT}/device`);
+  console.log(`  App/iPhone:  ws://${WIFI_IP}:${PORT}/coach`);
   console.log(`  Coach PC:    http://${USB_IP}:${PORT}/dashboard`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 });
