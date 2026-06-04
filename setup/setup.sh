@@ -203,13 +203,13 @@ EOF
 # Punta hostapd al config
 sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
 
-# IP statico per wlan0
-mkdir -p /etc/network/interfaces.d
-cat > /etc/network/interfaces.d/wlan0 << EOF
-auto wlan0
-iface wlan0 inet static
-    address ${WIFI_IP}
-    netmask 255.255.255.0
+# IP statico per wlan0 tramite systemd-networkd (Bookworm non usa ifupdown per wlan0)
+cat > /etc/systemd/network/wlan0.network << EOF
+[Match]
+Name=wlan0
+
+[Network]
+Address=${WIFI_IP}/24
 EOF
 
 # DHCP su wlan0 per iPhone
