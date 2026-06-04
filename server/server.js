@@ -278,8 +278,8 @@ wss.on('connection', (ws, req) => {
   const url      = req.url || '/';
   const ip       = req.socket.remoteAddress;
 
-  if (url === '/coach' || url === '/device') {
-    // ── Device (app atleta) ──
+  if (url === '/device') {
+    // ── Device (ESP32 atleta) ──
     console.log(`[device] connesso da ${ip}`);
 
     ws.on('message', raw => {
@@ -330,7 +330,7 @@ wss.on('connection', (ws, req) => {
     });
     ws.on('error', () => {});
 
-  } else {
+  } else if (url === '/coach' || url === '/') {
     // ── Coach (browser dashboard) ──
     coachClients.add(ws);
     console.log(`[coach] connesso da ${ip} · totale=${coachClients.size}`);
@@ -379,6 +379,8 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', () => { coachClients.delete(ws); });
     ws.on('error', () => {});
+  } else {
+    ws.close(1008, 'invalid path');
   }
 });
 
