@@ -231,6 +231,7 @@ cp /boot/aerodrag-server.js ${AERODRAG_DIR}/server.js 2>/dev/null || \
 cp $(dirname "$0")/../server/dashboard.html ${AERODRAG_DIR}/dashboard.html
 cp $(dirname "$0")/../server/package.json ${AERODRAG_DIR}/package.json
 
+chown -R pi:pi ${AERODRAG_DIR}
 cd ${AERODRAG_DIR}
 npm install --silent
 
