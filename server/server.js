@@ -76,8 +76,7 @@ function sessionAddFrame(frame) {
     lp.pts.push({ s:Math.round((frame.t-lp.startTs)/1000),
       CdA:+frame.CdA.toFixed(4), pwr:frame.pwr||0, spd:+(frame.spd||0).toFixed(1),
       hr:frame.hr||0, wind:+(frame.wind||0).toFixed(2), cad:frame.cad||0,
-      pitch:+(frame.pitch||0).toFixed(2), rho:+(frame.rho||0).toFixed(4),
-      pctAero:frame.pctAero||0, battery:frame.battery||0 });
+      pitch:+(frame.pitch||0).toFixed(1), rho:+(frame.rho||0).toFixed(4) });
   sess.frameCount++;
 }
 
