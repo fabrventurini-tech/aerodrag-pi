@@ -204,6 +204,7 @@ EOF
 sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
 
 # IP statico per wlan0
+mkdir -p /etc/network/interfaces.d
 cat > /etc/network/interfaces.d/wlan0 << EOF
 auto wlan0
 iface wlan0 inet static
