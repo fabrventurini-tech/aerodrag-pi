@@ -223,6 +223,13 @@ EOF
 systemctl unmask hostapd
 systemctl enable hostapd
 
+# Impedisce a NetworkManager di interferire con wlan0 (hostapd la gestisce)
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/aerodrag.conf << EOF
+[keyfile]
+unmanaged-devices=interface-name:wlan0
+EOF
+
 # ── 5. Installa server Node.js ────────────────────────────────────────────────
 echo "[5/8] Installazione server AeroDrag..."
 mkdir -p ${AERODRAG_DIR}
