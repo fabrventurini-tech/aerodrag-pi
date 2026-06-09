@@ -35,10 +35,16 @@ function pendingRemove(filename) { pendingSave(pendingLoad().filter(f => f !== f
 const sessions = new Map();
 
 function sessionStart(deviceId, athleteName) {
-  // Fix S1: se esiste già una sessione per questo device (riconnessione),
-  // salvala prima di sovrascrivere — evita perdita di dati
   if (sessions.has(deviceId)) {
     const existing = sessions.get(deviceId);
+    // Riconnessione WiFi rapida (< 5 min dall'ultimo frame): riprendi la
+    // sessione esistente senza spezzarla in più file
+    if (existing.lastSeen && Date.now() - existing.lastSeen < 5 * 60_000) {
+      existing.athleteName = athleteName || existing.athleteName;
+      console.log(`[pi] Sessione ripresa: ${existing.athleteName} (${deviceId})`);
+      return;
+    }
+    // Sessione vecchia (uscita precedente): salvala se ha abbastanza dati
     if (existing.frameCount >= 20) {
       console.log(`[pi] Riconnessione device — salvo sessione precedente (${existing.frameCount} frame)`);
       sessionEnd(deviceId);   // salva e poi sessions.delete avviene dentro
@@ -48,7 +54,7 @@ function sessionStart(deviceId, athleteName) {
   }
   sessions.set(deviceId, {
     deviceId, athleteName,
-    startTs: Date.now(), laps: {}, lapNotes: {}, frameCount: 0,
+    startTs: Date.now(), lastSeen: Date.now(), laps: {}, lapNotes: {}, frameCount: 0,
   });
   console.log(`[pi] Sessione avviata: ${athleteName} (${deviceId})`);
 }
@@ -78,6 +84,7 @@ function sessionAddFrame(frame) {
       hr:frame.hr||0, wind:+(frame.wind||0).toFixed(2), cad:frame.cad||0,
       pitch:+(frame.pitch||0).toFixed(1), rho:+(frame.rho||0).toFixed(4) });
   sess.frameCount++;
+  sess.lastSeen = Date.now();
 }
 
 function sessionSetNote(deviceId, lapNum, text) {
@@ -303,8 +310,10 @@ wss.on('connection', (ws, req) => {
         frame.athlete = frame.athlete || devInfo.athleteName;
 
         // Aggiorna il nome se l'app lo ha impostato dopo il hello
-        if (frame.athlete && frame.athlete !== devInfo.athleteName && devInfo !== null) {
+        if (frame.athlete && frame.athlete !== devInfo.athleteName) {
           devInfo.athleteName = frame.athlete;
+          const sess = sessions.get(devInfo.deviceId);
+          if (sess) sess.athleteName = frame.athlete;
           broadcast({ type:'athlete_update', deviceId:devInfo.deviceId, athleteName:frame.athlete });
         }
 
@@ -326,10 +335,15 @@ wss.on('connection', (ws, req) => {
       const devInfo = deviceWsMap.get(ws);
       if (devInfo) {
         console.log(`[device] disconnesso: ${devInfo.athleteName}`);
-        sessionEnd(devInfo.deviceId);
         deviceWsMap.delete(ws);
-        lastFrameByDevice.delete(devInfo.deviceId);
-        broadcast({ type:'device_disconnected', deviceId:devInfo.deviceId });
+        // Se lo stesso device si è già riconnesso con un'altra ws (riconnessione
+        // WiFi), non toccare la sessione attiva della nuova connessione
+        const stillConnected = [...deviceWsMap.values()].some(i => i.deviceId === devInfo.deviceId);
+        if (!stillConnected) {
+          sessionEnd(devInfo.deviceId);
+          lastFrameByDevice.delete(devInfo.deviceId);
+          broadcast({ type:'device_disconnected', deviceId:devInfo.deviceId });
+        }
         broadcast({ type:'athletes', list:[...deviceWsMap.values()] });
       }
     });
