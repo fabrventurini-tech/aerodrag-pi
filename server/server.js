@@ -270,9 +270,11 @@ const wss = new WebSocketServer({ server: httpServer });
 const deviceWsMap  = new Map();
 const coachClients = new Set();
 // lastFrameByDevice: Map<deviceId → frame> — per late-join dei coach
-// Non serve una history globale mista: ogni coach riceve uno snapshot
-// per device tramite lastFrameByDevice al momento della connessione.
 const lastFrameByDevice = new Map();
+// frameHistory: Map<deviceId → frame[]> — buffer frame recenti per il messaggio
+// 'history' inviato ai coach che si connettono a sessione già in corso
+const frameHistory = new Map();
+const HISTORY_MAX  = 100;   // ~10s a 10Hz per device
 let frameCount = 0;
 
 function broadcast(msg) {
@@ -317,6 +319,10 @@ wss.on('connection', (ws, req) => {
           broadcast({ type:'athlete_update', deviceId:devInfo.deviceId, athleteName:frame.athlete });
         }
 
+        // serverTs: il t del device è ms dal boot, non epoch — questo è
+        // l'unico timestamp assoluto affidabile (aggiunto prima di inoltro e salvataggio)
+        frame.serverTs = Date.now();
+
         frameCount++;
         sessionAddFrame(frame);
         // lapEvent:true → notifica la dashboard del cambio lap (l'ESP32 lo manda una sola volta)
@@ -324,6 +330,11 @@ wss.on('connection', (ws, req) => {
           broadcast({ type:'lap_event', deviceId:frame.device, lap:frame.lap });
         }
         lastFrameByDevice.set(frame.device, frame);
+        // Buffer history per late-join dei coach
+        let hist = frameHistory.get(frame.device);
+        if (!hist) { hist = []; frameHistory.set(frame.device, hist); }
+        hist.push(frame);
+        if (hist.length > HISTORY_MAX) hist.shift();
 
         const json = JSON.stringify(frame);
         coachClients.forEach(c => { if (c.readyState === 1) c.send(json); });
@@ -342,6 +353,7 @@ wss.on('connection', (ws, req) => {
         if (!stillConnected) {
           sessionEnd(devInfo.deviceId);
           lastFrameByDevice.delete(devInfo.deviceId);
+          frameHistory.delete(devInfo.deviceId);
           broadcast({ type:'device_disconnected', deviceId:devInfo.deviceId });
         }
         broadcast({ type:'athletes', list:[...deviceWsMap.values()] });
@@ -354,8 +366,11 @@ wss.on('connection', (ws, req) => {
     coachClients.add(ws);
     console.log(`[coach] connesso da ${ip} · totale=${coachClients.size}`);
 
-    // Invia snapshot dell'ultimo frame per ogni device live
-    lastFrameByDevice.forEach(frame => ws.send(JSON.stringify(frame)));
+    // History: buffer frame recenti di tutti i device per ripopolare i grafici
+    const allFrames = [];
+    frameHistory.forEach(hist => allFrames.push(...hist));
+    if (allFrames.length)
+      ws.send(JSON.stringify({ type:'history', frames:allFrames }));
     // Invia lista atleti correnti
     ws.send(JSON.stringify({ type:'athletes', list:[...deviceWsMap.values()] }));
     // Stato sync
@@ -367,25 +382,44 @@ wss.on('connection', (ws, req) => {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'cmd') {
+          // Whitelist rigida: solo questi action esatti raggiungono il device.
+          // Il firmware fa parsing a strstr sui primi 127 byte — mai passthrough.
           if (!['lap','start','stop','ota'].includes(msg.action)) return;
-          // ota richiede url
-          if (msg.action === 'ota' && !msg.url) {
-            ws.send(JSON.stringify({ type:'cmd_error', reason:'ota_missing_url' })); return;
-          }
           const targetDevId = msg.deviceId;   // può essere undefined = broadcast a tutti
+          if (msg.action === 'ota') {
+            // ota richiede url; rifiuta URL con sottostringhe che il parser strstr
+            // del firmware scambierebbe per comandi (ultima linea di difesa)
+            if (!msg.url || typeof msg.url !== 'string' ||
+                msg.url.includes('lap') || msg.url.includes('stop')) {
+              ws.send(JSON.stringify({ type:'cmd_error', action:msg.action,
+                deviceId:targetDevId, reason:'ota_invalid_url' }));
+              return;
+            }
+          }
+          // Riscrittura: payload minimo, senza deviceId (serve solo al routing del Pi)
           const payload = { type:'cmd', action:msg.action };
           if (msg.action === 'ota') payload.url = msg.url;
+          const payloadJson = JSON.stringify(payload);
+          if (payloadJson.length > 127) {   // il firmware ignora frame oltre 127 byte
+            ws.send(JSON.stringify({ type:'cmd_error', action:msg.action,
+              deviceId:targetDevId, reason:'payload_too_long' }));
+            return;
+          }
           let sent = 0;
           deviceWsMap.forEach((info, devWs) => {
             if (!targetDevId || info.deviceId === targetDevId) {
               if (devWs.readyState === 1) {
-                devWs.send(JSON.stringify(payload));
+                devWs.send(payloadJson);
                 sent++;
               }
             }
           });
-          if (sent === 0) ws.send(JSON.stringify({ type:'cmd_error', reason:'device_not_connected' }));
-          broadcast({ type:'cmd_echo', action:msg.action, deviceId:targetDevId, from:'coach' });
+          if (sent === 0) {
+            ws.send(JSON.stringify({ type:'cmd_error', action:msg.action,
+              deviceId:targetDevId, reason:'device_not_connected' }));
+            return;
+          }
+          broadcast({ type:'cmd_echo', action:msg.action, deviceId:targetDevId });
         }
         if (msg.type === 'lap_note') {
           sessionSetNote(msg.deviceId || 'unknown', msg.lapNum, msg.text);
@@ -403,10 +437,14 @@ wss.on('connection', (ws, req) => {
   }
 });
 
-// Heartbeat
+// Heartbeat — coach a 2s (misura latenza dashboard), device a 15s (keepalive)
 setInterval(() => {
   const ping = JSON.stringify({ type:'ping', t:Date.now() });
-  [...deviceWsMap.keys(), ...coachClients].forEach(c => { if (c?.readyState===1) c.send(ping); });
+  coachClients.forEach(c => { if (c?.readyState===1) c.send(ping); });
+}, 2_000);
+setInterval(() => {
+  const ping = JSON.stringify({ type:'ping', t:Date.now() });
+  deviceWsMap.forEach((info, ws) => { if (ws?.readyState===1) ws.send(ping); });
 }, 15_000);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
