@@ -2,6 +2,10 @@
  * AeroDrag Coach Server v4 — multi-atleta
  * Gestisce sessioni separate per device ID.
  * Ogni device si identifica con { device: "AA:BB:CC:DD:EE:FF", athlete: "Mario" }
+ *
+ * Contract: v0.1.0 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
+ *   Frame telemetria atteso a 2 Hz; pctAero in percentuale 0-100;
+ *   campi pitch/rho/lapEvent presenti nel frame e registrati nelle sessioni.
  */
 
 const http = require('http');

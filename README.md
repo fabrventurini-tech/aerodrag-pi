@@ -54,9 +54,14 @@ Poi invia frame dati a **2 Hz**:
   "cad": 90,
   "wind": 1.8,
   "battery": 85,
-  "pctAero": 87.0
+  "pctAero": 87.0,
+  "pitch": 2.3,
+  "rho": 1.225,
+  "lapEvent": false
 }
 ```
+> `pctAero` è una percentuale **0–100**. `pitch` [°], `rho` [kg/m³] e
+> `lapEvent` (bool, marker di giro) fanno parte del contratto v0.1.0.
 
 ### Pi → App atleta (comandi coach)
 ```json
