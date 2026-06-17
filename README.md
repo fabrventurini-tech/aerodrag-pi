@@ -72,7 +72,11 @@ Poi invia frame dati a **2 Hz**:
 }
 ```
 > `pctAero` è una percentuale **0–100**. `pitch` [°], `rho` [kg/m³] e
-> `lapEvent` (bool, marker di giro) fanno parte del contratto v0.1.0.
+> `lapEvent` (bool, marker di giro) fanno parte del contratto.
+> **`device` è obbligatorio e dev'essere un MAC valido** (`AA:BB:CC:DD:EE:FF`):
+> contract v0.1.2 §3 — i frame senza `device` valido sono rifiutati
+> all'ingestione, così ogni sessione persistita ha sempre un `deviceId`
+> (filename `session_{ts}_{deviceIdHex}.json`, §5).
 
 ### Pi → App atleta (comandi coach)
 ```json

@@ -3,9 +3,11 @@
  * Gestisce sessioni separate per device ID.
  * Ogni device si identifica con { device: "AA:BB:CC:DD:EE:FF", athlete: "Mario" }
  *
- * Contract: v0.1.0 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
+ * Contract: v0.1.2 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
  *   Frame telemetria atteso a 2 Hz; pctAero in percentuale 0-100;
  *   campi pitch/rho/lapEvent presenti nel frame e registrati nelle sessioni.
+ *   §3: `device` obbligatorio e MAC-valido → frame senza identità rifiutati
+ *   all'ingestione. §5: filename sessione sempre session_{ts}_{deviceIdHex}.json.
  */
 
 const http = require('http');
@@ -20,6 +22,11 @@ const SESSIONS_DIR = path.join(__dirname, 'sessions');
 const PENDING_FILE = path.join(SESSIONS_DIR, '_pending.json');
 const PC_IP        = '192.168.7.2';
 const PC_PORT      = 8081;
+
+// Contract §3 (v0.1.2): il campo `device` dei frame DEVE essere un MAC valido
+// (6 ottetti esadecimali separati da ':'). È la chiave di sessione e l'identità
+// alla sorgente: i frame che non lo rispettano vengono rifiutati all'ingestione.
+const MAC_RE = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
@@ -69,7 +76,12 @@ function sessionAddFrame(frame) {
   if (typeof frame.CdA !== 'number' || !isFinite(frame.CdA)) return;
   if (frame.CdA < 0.05 || frame.CdA > 1.0) return;   // fuori range fisico → scarta
 
-  const deviceId = frame.device || 'unknown';
+  // Contract §3 (v0.1.2): `device` obbligatorio e MAC-valido. Rifiuta
+  // all'ingestione i frame senza identità valida (come per il CdA fuori range):
+  // così una sessione senza deviceId valido non si forma mai (§5).
+  if (typeof frame.device !== 'string' || !MAC_RE.test(frame.device)) return;
+
+  const deviceId = frame.device;
   if (!sessions.has(deviceId)) {
     sessionStart(deviceId, frame.athlete || 'Atleta');
   }
@@ -121,14 +133,12 @@ function sessionEnd(deviceId) {
   // Fix P2: sanitizzazione stringente — solo hex e ':' ammessi nel device_id,
   // tutti gli altri caratteri rimossi. Previene path traversal anche se un device
   // malevolo si presenta con un ID arbitrario via BLE → snprintf JSON.
-  const safeId   = deviceId.replace(/[^A-Fa-f0-9:]/g, '').replace(/:/g, '');
-  // Contract §5: il nome file usa il deviceId in hex. Se il deviceId si sanifica
-  // a vuoto, NON emettere il token non-hex 'unknown' (che il coach /receive
-  // rifiuterebbe con 400): usare la forma senza suffisso `session_{ts}.json`,
-  // accettata dal receiver (suffisso device opzionale). Nessun dato perso.
-  const filename = safeId
-    ? `session_${startTs}_${safeId}.json`
-    : `session_${startTs}.json`;
+  // Contract §5 (v0.1.2): filename SEMPRE `session_{ts}_{deviceIdHex}.json`.
+  // La validazione MAC alla sorgente (§3, sessionAddFrame) garantisce che ogni
+  // sessione abbia un deviceId valido → safeId è sempre hex non vuoto; niente
+  // token `unknown` né forma anonima senza suffisso.
+  const safeId   = deviceId.replace(/:/g, '');
+  const filename = `session_${startTs}_${safeId}.json`;
   const json     = JSON.stringify({ ts:startTs, deviceId, athleteName, laps:lapData }, null, 2);
   fs.writeFile(path.join(SESSIONS_DIR, filename), json, err => {
     if (err) { console.error('[pi] Errore salvataggio:', err.message); sessions.delete(deviceId); return; }
