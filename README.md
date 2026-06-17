@@ -33,6 +33,17 @@ Il cavo USB fa tre cose contemporaneamente:
 
 ## Protocollo WebSocket
 
+Tre path WebSocket sul server `:8080` (contract v0.1.0):
+
+| Path | Chi | Ruolo |
+|---|---|---|
+| `/device` | firmware ESP32 in WiFi diretto (confine B) | sorgente telemetria + riceve comandi |
+| `/coach` | app atleta `aerodrag-new` (relay BLE, confine C) | sorgente telemetria + riceve comandi |
+| `/` | dashboard (browser Pi + Electron coach, confine D) | sola visualizzazione frame/eventi + invia comandi |
+
+`/device` e `/coach` sono gestiti in modo identico: inviano `hello` + frame e
+ricevono `start`/`stop`/`lap`.
+
 ### App atleta → Pi (path: `/coach`)
 
 Al momento della connessione, l'app invia un **hello**:

@@ -290,9 +290,12 @@ wss.on('connection', (ws, req) => {
   const url      = req.url || '/';
   const ip       = req.socket.remoteAddress;
 
-  if (url === '/device') {
-    // ── Device (ESP32 atleta) ──
-    console.log(`[device] connesso da ${ip}`);
+  if (url === '/device' || url === '/coach') {
+    // ── Sorgente telemetria atleta (contract v0.1.0, confini B/C + D) ──
+    //   /device = firmware ESP32 in WiFi diretto (confine B)
+    //   /coach  = app atleta (aerodrag-new) che fa da relay BLE (confine C)
+    // Entrambe inviano hello + frame JSON e ricevono i comandi start/stop/lap.
+    console.log(`[${url === '/coach' ? 'app' : 'device'}] connesso da ${ip}`);
 
     ws.on('message', raw => {
       try {
@@ -365,8 +368,8 @@ wss.on('connection', (ws, req) => {
     });
     ws.on('error', () => {});
 
-  } else if (url === '/coach' || url === '/') {
-    // ── Coach (browser dashboard) ──
+  } else if (url === '/') {
+    // ── Dashboard coach (browser Pi + Electron) — sola visualizzazione (confine D) ──
     coachClients.add(ws);
     console.log(`[coach] connesso da ${ip} · totale=${coachClients.size}`);
 
