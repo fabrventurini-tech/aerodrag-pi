@@ -122,7 +122,13 @@ function sessionEnd(deviceId) {
   // tutti gli altri caratteri rimossi. Previene path traversal anche se un device
   // malevolo si presenta con un ID arbitrario via BLE → snprintf JSON.
   const safeId   = deviceId.replace(/[^A-Fa-f0-9:]/g, '').replace(/:/g, '');
-  const filename = `session_${startTs}_${safeId || 'unknown'}.json`;
+  // Contract §5: il nome file usa il deviceId in hex. Se il deviceId si sanifica
+  // a vuoto, NON emettere il token non-hex 'unknown' (che il coach /receive
+  // rifiuterebbe con 400): usare la forma senza suffisso `session_{ts}.json`,
+  // accettata dal receiver (suffisso device opzionale). Nessun dato perso.
+  const filename = safeId
+    ? `session_${startTs}_${safeId}.json`
+    : `session_${startTs}.json`;
   const json     = JSON.stringify({ ts:startTs, deviceId, athleteName, laps:lapData }, null, 2);
   fs.writeFile(path.join(SESSIONS_DIR, filename), json, err => {
     if (err) { console.error('[pi] Errore salvataggio:', err.message); sessions.delete(deviceId); return; }
