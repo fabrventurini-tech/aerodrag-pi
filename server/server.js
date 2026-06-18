@@ -3,11 +3,12 @@
  * Gestisce sessioni separate per device ID.
  * Ogni device si identifica con { device: "AA:BB:CC:DD:EE:FF", athlete: "Mario" }
  *
- * Contract: v0.1.2 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
+ * Contract: v0.1.3 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
  *   Frame telemetria atteso a 2 Hz; pctAero in percentuale 0-100;
  *   campi pitch/rho/lapEvent presenti nel frame e registrati nelle sessioni.
  *   §3: `device` obbligatorio e MAC-valido → frame senza identità rifiutati
  *   all'ingestione. §5: filename sessione sempre session_{ts}_{deviceIdHex}.json.
+ *   (v0.1.3 aggiunge l'obbligo speculare lato produttore: nessun impatto sul pi.)
  */
 
 const http = require('http');
