@@ -57,8 +57,8 @@ const server = http.createServer((req, res) => {
   // POST /receive?filename=... — riceve una sessione dal Pi
   if (req.method === 'POST' && req.url.startsWith('/receive')) {
     const filename = new URL(req.url, 'http://x').searchParams.get('filename') || '';
-    // Accetta: session_TIMESTAMP.json  oppure  session_TIMESTAMP_DEVICEID.json
-    if (!/^session_\d+(_[A-Fa-f0-9]+)?\.json$/.test(filename)) {
+    // Contract §5 (v0.1.2+): solo session_{ts}_{deviceIdHex}.json — suffisso OBBLIGATORIO
+    if (!/^session_\d+_[A-Fa-f0-9]+\.json$/.test(filename)) {
       res.writeHead(400); return res.end('Invalid');
     }
     let body = '';
@@ -107,7 +107,8 @@ const server = http.createServer((req, res) => {
   const m = req.url.match(/^\/sessions\/(.+)$/);
   if (m && req.method === 'GET') {
     // Fix R1: valida pattern prima di path.join — previene path traversal
-    if (!/^session_\d+(_[A-Fa-f0-9]+)?$/.test(m[1])) {
+    // Contract §5 (v0.1.2+): suffisso deviceId OBBLIGATORIO (no forma anonima)
+    if (!/^session_\d+_[A-Fa-f0-9]+$/.test(m[1])) {
       res.writeHead(400); return res.end('invalid id');
     }
     try {
