@@ -273,7 +273,8 @@ const httpServer = http.createServer((req, res) => {
   const m = url.match(/^\/api\/sessions\/(.+)$/);
   if (m) {
     // Fix S2: valida pattern session_DDDDDDDD_HEX prima di path.join — previene path traversal
-    if (!/^session_\d+(_[A-Fa-f0-9]+)?$/.test(m[1])) {
+    // Contract §5 (v0.1.2+): suffisso deviceId OBBLIGATORIO (no forma anonima session_{ts})
+    if (!/^session_\d+_[A-Fa-f0-9]+$/.test(m[1])) {
       res.writeHead(400); return res.end('invalid id');
     }
     try {
