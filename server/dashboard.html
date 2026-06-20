@@ -453,6 +453,7 @@ function connect() {
       else if (m.type==='cmd_echo')    { handleEcho(m); }
       else if (m.type==='cmd_error')   { toast('Device non connesso','#e83a50'); }
       else if (m.type==='lap_note')    { applyNote(m.lapNum, m.text); }
+      else if (m.type==='athletes')    { handleAthletesMsg(m); }
       else if (m.CdA !== undefined) { document.getElementById('waiting').style.display='none';
         updateAthletePanel(m); }
     } catch{}
@@ -911,8 +912,9 @@ function handleEcho(m) {
   if (m.action==='lap') { lapBounds.push(sBuf.filter(v=>v!==null).length-1); toast('LAP segnato','#f0a020'); }
 }
 
-// Notes
-const lapNotes={};
+// Notes — `lapNotes` è già dichiarato sopra (sezione stats, ~riga 427): riuso
+// lo stesso oggetto condiviso. Una seconda `const` qui causava
+// "Identifier 'lapNotes' has already been declared" → script morto.
 function saveLapNote(n, t, deviceId) {
   lapNotes[n] = t;
   // Fix: include deviceId — il Pi usa msg.deviceId per associare la nota all'atleta corretto
