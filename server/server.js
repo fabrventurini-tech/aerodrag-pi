@@ -21,6 +21,10 @@ const PENDING_FILE = path.join(SESSIONS_DIR, '_pending.json');
 const PC_IP        = '192.168.7.2';
 const PC_PORT      = 8081;
 
+// MAC valido = unica identità ammessa per i frame (contratto §3/§5).
+// I frame senza device MAC valido NON formano sessione (niente 'unknown').
+const MAC_RE = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
+
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 // ─── Pending queue ────────────────────────────────────────────────────────────
@@ -69,7 +73,10 @@ function sessionAddFrame(frame) {
   if (typeof frame.CdA !== 'number' || !isFinite(frame.CdA)) return;
   if (frame.CdA < 0.05 || frame.CdA > 1.0) return;   // fuori range fisico → scarta
 
-  const deviceId = frame.device || 'unknown';
+  // C2: identità obbligatoria alla sorgente — rifiuta i frame senza MAC valido
+  // (contratto §3). Nessuna sessione anonima/'unknown' si forma mai.
+  const deviceId = frame.device;
+  if (typeof deviceId !== 'string' || !MAC_RE.test(deviceId)) return;
   if (!sessions.has(deviceId)) {
     sessionStart(deviceId, frame.athlete || 'Atleta');
   }
@@ -77,11 +84,14 @@ function sessionAddFrame(frame) {
   const lap  = frame.lap || 1;
   if (!sess.laps[lap])
     sess.laps[lap] = { n:0, sumCdA:0, sumPwr:0, sumSpd:0, sumHr:0,
-                       sumWind:0, sumCad:0, startTs:frame.t, pts:[] };
+                       sumWind:0, sumCad:0, startTs:frame.t, bestCdA:Infinity, durationS:0, pts:[] };
   const lp = sess.laps[lap];
   lp.n++; lp.sumCdA+=frame.CdA; lp.sumPwr+=(frame.pwr||0);
   lp.sumSpd+=(frame.spd||0); lp.sumHr+=(frame.hr||0);
   lp.sumWind+=(frame.wind||0); lp.sumCad+=(frame.cad||0);
+  // Fix #11: traccia durationS/bestCdA su OGNI frame, non solo sui pts campionati
+  if (frame.CdA < lp.bestCdA) lp.bestCdA = frame.CdA;
+  lp.durationS = Math.max(lp.durationS, Math.round((frame.t - lp.startTs) / 1000));
   if (lp.n % 5 === 0 && lp.pts.length < 2000)   // cap a 2000 pt/lap (~16min a 2pt/s)
     lp.pts.push({ s:Math.round((frame.t-lp.startTs)/1000),
       CdA:+frame.CdA.toFixed(4), pwr:frame.pwr||0, spd:+(frame.spd||0).toFixed(1),
@@ -105,10 +115,10 @@ function sessionEnd(deviceId) {
     const lp = laps[n];
     return {
       lapNum:n, startTs:lp.startTs,
-      durationS:   lp.pts.length ? lp.pts[lp.pts.length-1].s : 0,
+      // Fix #11: durationS/bestCdA tracciati su ogni frame, non solo sui pts campionati
+      durationS:   lp.durationS,
       avgCdA:      +(lp.sumCdA/lp.n).toFixed(4),
-      // Fix S3: Math.min(...arr) può causare stack overflow con array grandi
-      bestCdA:     lp.pts.length ? +(lp.pts.reduce((m,p)=>p.CdA<m?p.CdA:m, Infinity)).toFixed(4) : 0,
+      bestCdA:     isFinite(lp.bestCdA) ? +lp.bestCdA.toFixed(4) : 0,
       avgPowerW:   Math.round(lp.sumPwr/lp.n),
       avgSpeedKmh: +(lp.sumSpd/lp.n).toFixed(1),
       avgHr:       Math.round(lp.sumHr/lp.n)||0,
@@ -121,15 +131,17 @@ function sessionEnd(deviceId) {
   // Fix P2: sanitizzazione stringente — solo hex e ':' ammessi nel device_id,
   // tutti gli altri caratteri rimossi. Previene path traversal anche se un device
   // malevolo si presenta con un ID arbitrario via BLE → snprintf JSON.
+  // deviceId è già garantito MAC valido all'ingestione (C2): safeId hex non vuoto.
   const safeId   = deviceId.replace(/[^A-Fa-f0-9:]/g, '').replace(/:/g, '');
-  const filename = `session_${startTs}_${safeId || 'unknown'}.json`;
+  const filename = `session_${startTs}_${safeId}.json`;
   const json     = JSON.stringify({ ts:startTs, deviceId, athleteName, laps:lapData }, null, 2);
   fs.writeFile(path.join(SESSIONS_DIR, filename), json, err => {
     if (err) { console.error('[pi] Errore salvataggio:', err.message); sessions.delete(deviceId); return; }
     console.log(`[pi] Sessione salvata: ${athleteName} → ${filename}`);
+    // Fix #20: notifica i coach solo dopo che il file è effettivamente scritto
+    broadcast({ type:'session_saved', filename, deviceId, athleteName, ts:startTs, lapCount:lapData.length });
     sendToPc(filename, json, ok => { if (!ok) pendingAdd(filename); });
   });
-  broadcast({ type:'session_saved', filename, deviceId, athleteName, ts:startTs, lapCount:lapData.length });
   sessions.delete(deviceId);
 }
 
@@ -152,12 +164,17 @@ function sendToPc(filename, json, callback) {
   req.write(json); req.end();
 }
 
+// Fix #10: guard anti-concorrenza — probePc + boot + sync_now possono invocare
+// syncPending in parallelo causando POST doppi. Un solo passaggio per volta.
+let syncing = false;
 function syncPending() {
+  if (syncing) return;
   const pending = pendingLoad();
   if (!pending.length) return;
+  syncing = true;
   let i = 0;
   function next() {
-    if (i >= pending.length) { broadcast({ type:'sync_complete', synced:i }); return; }
+    if (i >= pending.length) { syncing = false; broadcast({ type:'sync_complete', synced:i }); return; }
     const filename = pending[i++];
     try {
       const json = fs.readFileSync(path.join(SESSIONS_DIR, filename), 'utf8');
@@ -213,7 +230,7 @@ const httpServer = http.createServer((req, res) => {
     try {
       const files = fs.readdirSync(SESSIONS_DIR)
         .filter(f => f.endsWith('.json') && f !== '_pending.json')
-        .sort().reverse().slice(0, 100);
+        .slice(0, 500);
       const pending = pendingLoad();
       const list = files.map(f => {
         try {
@@ -232,13 +249,19 @@ const httpServer = http.createServer((req, res) => {
           };
         } catch { return null; }
       }).filter(Boolean);
+      // Fix #21: ordina per ts numerico (decrescente), non lessicograficamente
+      list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
       res.writeHead(200, { 'Content-Type':'application/json' });
-      return res.end(JSON.stringify(list));
+      return res.end(JSON.stringify(list.slice(0, 100)));
     } catch { res.writeHead(500); return res.end('[]'); }
   }
 
   // OTA firmware: l'ESP32 scarica il binario da questo endpoint
   // Il file fw.bin va copiato in /home/pi/aerodrag/fw.bin prima di inviare il cmd ota
+  // SICUREZZA (#16): endpoint OTA senza autenticazione. È accettabile SOLO perché il
+  // server è raggiungibile unicamente dalla LAN isolata del Pi (AP WiFi WPA2 + USB
+  // gadget point-to-point), non instradata verso Internet. Se in futuro il Pi venisse
+  // esposto su una rete condivisa, aggiungere auth (token) prima di servire fw.bin.
   if (url === '/fw.bin') {
     const fwPath = path.join(__dirname, 'fw.bin');
     try {
@@ -286,6 +309,31 @@ function broadcast(msg) {
   coachClients.forEach(c => { if (c.readyState === 1) c.send(json); });
 }
 
+// Ingestione telemetria condivisa fra /device e /coach (contratto §3, confine C).
+// Aggiunge serverTs, registra il frame nella sessione, propaga lapEvent/history
+// e lo ritrasmette a tutti i coach. `exclude` evita l'eco al mittente coach.
+function ingestTelemetry(frame, exclude) {
+  // serverTs: il t del device è ms dal boot, non epoch — questo è
+  // l'unico timestamp assoluto affidabile (aggiunto prima di inoltro e salvataggio)
+  frame.serverTs = Date.now();
+  frameCount++;
+  sessionAddFrame(frame);
+  // sessionAddFrame scarta i frame senza MAC valido: non propagarli oltre
+  if (typeof frame.device !== 'string' || !MAC_RE.test(frame.device)) return;
+  // lapEvent:true → notifica la dashboard del cambio lap (inviato una sola volta)
+  if (frame.lapEvent === true) {
+    broadcast({ type:'lap_event', deviceId:frame.device, lap:frame.lap });
+  }
+  lastFrameByDevice.set(frame.device, frame);
+  let hist = frameHistory.get(frame.device);
+  if (!hist) { hist = []; frameHistory.set(frame.device, hist); }
+  hist.push(frame);
+  if (hist.length > HISTORY_MAX) hist.shift();
+
+  const json = JSON.stringify(frame);
+  coachClients.forEach(c => { if (c !== exclude && c.readyState === 1) c.send(json); });
+}
+
 wss.on('connection', (ws, req) => {
   const url      = req.url || '/';
   const ip       = req.socket.remoteAddress;
@@ -311,7 +359,7 @@ wss.on('connection', (ws, req) => {
         }
         if (frame.type === 'ping') return;
 
-        const devInfo = deviceWsMap.get(ws) || { deviceId:'unknown', athleteName:'Atleta' };
+        const devInfo = deviceWsMap.get(ws) || { deviceId:frame.device, athleteName:'Atleta' };
         frame.device  = frame.device  || devInfo.deviceId;
         frame.athlete = frame.athlete || devInfo.athleteName;
 
@@ -323,25 +371,7 @@ wss.on('connection', (ws, req) => {
           broadcast({ type:'athlete_update', deviceId:devInfo.deviceId, athleteName:frame.athlete });
         }
 
-        // serverTs: il t del device è ms dal boot, non epoch — questo è
-        // l'unico timestamp assoluto affidabile (aggiunto prima di inoltro e salvataggio)
-        frame.serverTs = Date.now();
-
-        frameCount++;
-        sessionAddFrame(frame);
-        // lapEvent:true → notifica la dashboard del cambio lap (l'ESP32 lo manda una sola volta)
-        if (frame.lapEvent === true) {
-          broadcast({ type:'lap_event', deviceId:frame.device, lap:frame.lap });
-        }
-        lastFrameByDevice.set(frame.device, frame);
-        // Buffer history per late-join dei coach
-        let hist = frameHistory.get(frame.device);
-        if (!hist) { hist = []; frameHistory.set(frame.device, hist); }
-        hist.push(frame);
-        if (hist.length > HISTORY_MAX) hist.shift();
-
-        const json = JSON.stringify(frame);
-        coachClients.forEach(c => { if (c.readyState === 1) c.send(json); });
+        ingestTelemetry(frame);
 
       } catch (e) { console.error('[relay] error:', e.message); }
     });
@@ -385,6 +415,18 @@ wss.on('connection', (ws, req) => {
     ws.on('message', raw => {
       try {
         const msg = JSON.parse(raw.toString());
+
+        // C1 (contratto §3, confine C): l'app invia i frame di telemetria su /coach.
+        // Un FRAME è un messaggio con `device` stringa e `CdA` numerico che NON è un
+        // messaggio di controllo. Instradalo come telemetria (sessionAddFrame + broadcast),
+        // esattamente come /device. I messaggi di controllo proseguono sotto.
+        const CONTROL = ['cmd', 'lap_note', 'sync_now', 'ping', 'hello'];
+        if (!CONTROL.includes(msg.type) &&
+            typeof msg.device === 'string' && typeof msg.CdA === 'number') {
+          ingestTelemetry(msg, ws);   // ws = mittente, escluso dall'eco
+          return;
+        }
+
         if (msg.type === 'cmd') {
           // Whitelist rigida: solo questi action esatti raggiungono il device.
           // Il firmware fa parsing a strstr sui primi 127 byte — mai passthrough.
@@ -404,7 +446,8 @@ wss.on('connection', (ws, req) => {
           const payload = { type:'cmd', action:msg.action };
           if (msg.action === 'ota') payload.url = msg.url;
           const payloadJson = JSON.stringify(payload);
-          if (payloadJson.length > 127) {   // il firmware ignora frame oltre 127 byte
+          // C5: lunghezza in BYTE (UTF-8), non in code unit UTF-16
+          if (Buffer.byteLength(payloadJson) > 127) {   // il firmware ignora frame oltre 127 byte
             ws.send(JSON.stringify({ type:'cmd_error', action:msg.action,
               deviceId:targetDevId, reason:'payload_too_long' }));
             return;
@@ -426,7 +469,8 @@ wss.on('connection', (ws, req) => {
           broadcast({ type:'cmd_echo', action:msg.action, deviceId:targetDevId });
         }
         if (msg.type === 'lap_note') {
-          sessionSetNote(msg.deviceId || 'unknown', msg.lapNum, msg.text);
+          // C2: nessun fallback 'unknown' — la nota si applica solo a un device noto
+          if (msg.deviceId) sessionSetNote(msg.deviceId, msg.lapNum, msg.text);
           const json = JSON.stringify(msg);
           coachClients.forEach(c => { if (c !== ws && c.readyState === 1) c.send(json); });
         }

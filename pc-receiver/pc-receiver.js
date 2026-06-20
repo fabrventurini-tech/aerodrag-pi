@@ -32,7 +32,10 @@ function httpGet(url) {
         json: () => Promise.resolve(JSON.parse(body)), text: () => Promise.resolve(body) }));
     });
     req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('timeout', () => {
+      req.destroy();
+      const e = new Error('timeout'); e.code = 'ETIMEDOUT'; reject(e);
+    });
     req.end();
   });
 }
@@ -57,20 +60,21 @@ const server = http.createServer((req, res) => {
   // POST /receive?filename=... — riceve una sessione dal Pi
   if (req.method === 'POST' && req.url.startsWith('/receive')) {
     const filename = new URL(req.url, 'http://x').searchParams.get('filename') || '';
-    // Accetta: session_TIMESTAMP.json  oppure  session_TIMESTAMP_DEVICEID.json
-    if (!/^session_\d+(_[A-Fa-f0-9]+)?\.json$/.test(filename)) {
+    // #22: suffisso deviceId OBBLIGATORIO (contratto §5) — session_{ts}_{hex}.json
+    if (!/^session_\d+_[A-Fa-f0-9]+\.json$/.test(filename)) {
       res.writeHead(400); return res.end('Invalid');
     }
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
+      // #22: valida/parsa il JSON PRIMA di scrivere il file — niente file corrotti su disco
+      let d;
+      try { d = JSON.parse(body); }
+      catch { res.writeHead(400); return res.end('Invalid JSON'); }
       fs.writeFile(path.join(SESSIONS_DIR, filename), body, err => {
         if (err) { res.writeHead(500); return res.end('Error'); }
-        try {
-          const d = JSON.parse(body);
-          const date = new Date(d.ts).toLocaleString('it-IT');
-          console.log(`[rx] ✓ ${filename} — ${d.laps?.length||0} lap (${date})`);
-        } catch {}
+        const date = new Date(d.ts).toLocaleString('it-IT');
+        console.log(`[rx] ✓ ${filename} — ${d.laps?.length||0} lap (${date})`);
         res.writeHead(200); res.end('OK');
       });
     });
@@ -106,8 +110,8 @@ const server = http.createServer((req, res) => {
   // GET /sessions/:id — sessione completa
   const m = req.url.match(/^\/sessions\/(.+)$/);
   if (m && req.method === 'GET') {
-    // Fix R1: valida pattern prima di path.join — previene path traversal
-    if (!/^session_\d+(_[A-Fa-f0-9]+)?$/.test(m[1])) {
+    // Fix R1 + #22: valida pattern (suffisso deviceId obbligatorio) prima di path.join
+    if (!/^session_\d+_[A-Fa-f0-9]+$/.test(m[1])) {
       res.writeHead(400); return res.end('invalid id');
     }
     try {
@@ -158,8 +162,10 @@ async function pullMissingSessions() {
     }
     console.log(`[sync] Sincronizzazione completata — ${missing.length} sessioni scaricate`);
   } catch (e) {
-    // Il Pi non è ancora connesso — riprova tra 30s
-    if (!e.message.includes('ECONNREFUSED') && !e.message.includes('fetch'))
+    // Il Pi non è ancora connesso — riprova al prossimo giro.
+    // #22: filtra per e.code (errore di rete atteso), non per stringa del messaggio
+    const NET_ERRORS = ['ECONNREFUSED', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'];
+    if (!NET_ERRORS.includes(e.code))
       console.warn('[sync] Errore:', e.message);
   }
 }

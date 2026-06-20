@@ -16,6 +16,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -e
+# Fix #6: path assoluto dello script — con `set -e` i path relativi basati su $0
+# falliscono se lo script è invocato da una cwd diversa. Tutte le `cp` usano $SCRIPT_DIR.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AERODRAG_DIR="/home/pi/aerodrag"
 WIFI_SSID="AeroDrag"
 WIFI_PASS="aerodrag2024"
@@ -37,7 +40,20 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # ── 1. Aggiorna sistema ───────────────────────────────────────────────────────
 echo "[1/8] Aggiornamento sistema..."
 apt-get update -qq
-apt-get install -y -qq nodejs npm hostapd dnsmasq git
+# Fix #5: il pacchetto Debian `nodejs` è troppo vecchio (<18); il server usa
+# AbortSignal.timeout (Node≥17.3) e package.json richiede >=18. Installa Node 18.x
+# da NodeSource (include già npm — NON installare il pacchetto `npm` separato).
+apt-get install -y -qq hostapd dnsmasq git curl ca-certificates
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+apt-get install -y -qq nodejs
+
+# Verifica versione Node
+NODE_MAJOR="$(node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')"
+if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 18 ]; then
+    echo "ERRORE: Node.js >= 18 richiesto, trovato '$(node -v 2>/dev/null || echo nessuno)'."
+    echo "        Installa Node 18.x da https://deb.nodesource.com/setup_18.x e riesegui."
+    exit 1
+fi
 
 # ── 2. USB Ethernet gadget (RNDIS plug-and-play) ─────────────────────────────
 # Usa configfs + Microsoft OS Descriptors → Windows installa il driver RNDIS
@@ -173,9 +189,13 @@ systemctl enable systemd-networkd
 
 # ── 3. DHCP su USB (per il PC coach) ─────────────────────────────────────────
 echo "[3/8] Configurazione DHCP USB..."
-cat >> /etc/dnsmasq.conf << EOF
+# Fix #9: config dnsmasq in un file dedicato SOVRASCRITTO ad ogni run (niente
+# duplicati in /etc/dnsmasq.conf che potrebbero impedire l'avvio di dnsmasq).
+mkdir -p /etc/dnsmasq.d
+cat > /etc/dnsmasq.d/aerodrag.conf << EOF
+# AeroDrag DHCP — file gestito da setup.sh (sovrascritto ad ogni esecuzione)
 
-# AeroDrag USB DHCP (per PC coach)
+# USB DHCP (per PC coach)
 interface=usb0
 dhcp-range=usb0,192.168.7.2,192.168.7.10,255.255.255.0,12h
 EOF
@@ -212,10 +232,10 @@ Name=wlan0
 Address=${WIFI_IP}/24
 EOF
 
-# DHCP su wlan0 per iPhone
-cat >> /etc/dnsmasq.conf << EOF
+# DHCP su wlan0 per iPhone (appeso al file dedicato creato allo step 3)
+cat >> /etc/dnsmasq.d/aerodrag.conf << EOF
 
-# AeroDrag WiFi DHCP (per iPhone atleta)
+# WiFi DHCP (per iPhone atleta)
 interface=wlan0
 dhcp-range=wlan0,192.168.8.10,192.168.8.50,255.255.255.0,12h
 EOF
@@ -234,9 +254,9 @@ EOF
 echo "[5/8] Installazione server AeroDrag..."
 mkdir -p ${AERODRAG_DIR}
 cp /boot/aerodrag-server.js ${AERODRAG_DIR}/server.js 2>/dev/null || \
-    cp $(dirname "$0")/../server/server.js ${AERODRAG_DIR}/server.js
-cp $(dirname "$0")/../server/dashboard.html ${AERODRAG_DIR}/dashboard.html
-cp $(dirname "$0")/../server/package.json ${AERODRAG_DIR}/package.json
+    cp "${SCRIPT_DIR}/../server/server.js" ${AERODRAG_DIR}/server.js
+cp "${SCRIPT_DIR}/../server/dashboard.html" ${AERODRAG_DIR}/dashboard.html
+cp "${SCRIPT_DIR}/../server/package.json" ${AERODRAG_DIR}/package.json
 
 chown -R pi:pi ${AERODRAG_DIR}
 cd ${AERODRAG_DIR}
@@ -313,7 +333,8 @@ systemctl enable aerodrag-led
 # ── 8. Hostname e info ────────────────────────────────────────────────────────
 echo "[8/8] Configurazione hostname..."
 hostnamectl set-hostname aerodrag-pi
-echo "127.0.1.1 aerodrag-pi" >> /etc/hosts
+# Fix #9: append idempotente — evita righe duplicate ad ogni riesecuzione
+grep -q "aerodrag-pi" /etc/hosts || echo "127.0.1.1 aerodrag-pi" >> /etc/hosts
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

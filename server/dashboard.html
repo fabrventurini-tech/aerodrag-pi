@@ -407,7 +407,6 @@ body{background:var(--bg);color:var(--text);font-family:'SF Mono','Fira Code',mo
       <div class="rs">
         <div class="rt">Connessione Pi</div>
         <div class="srow"><span class="sk">Indirizzo</span><span class="sv" style="color:var(--teal)" id="r-addr">—</span></div>
-        <div class="srow"><span class="sk">Latenza</span><span class="sv" id="r-lat">—</span></div>
         <div class="srow"><span class="sk">Frequenza</span><span class="sv">2 Hz</span></div>
       </div>
     </div>
@@ -417,6 +416,10 @@ body{background:var(--bg);color:var(--text);font-family:'SF Mono','Fira Code',mo
 <script>
 const LAP_COLORS = ['#00c896','#f0a020','#3a8cf0','#8b5cf6','#f06090','#22c55e','#fb923c','#38bdf8'];
 const N = 180;
+
+// Fix #4: helper $ robusto — accetta sia id nudi ($('spark')) sia selettori ($('#m-cda')).
+// Definito qui in cima perché usato dalla creazione dei chart (più sotto).
+const $ = s => s[0]==='#' ? document.querySelector(s) : document.getElementById(s);
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const sess = { n:0, sumCdA:0, sumPwr:0, sumSpd:0, sumHr:0, sumAero:0, sumWind:0,
@@ -446,13 +449,23 @@ function connect() {
   ws.onmessage = e => {
     try {
       const m = JSON.parse(e.data);
-      if (m.type==='ping')             { document.getElementById('r-lat').textContent=(Date.now()-pingTs||0)+'ms'; pingTs=Date.now(); }
+      if (m.type==='ping')             { /* Fix #12: heartbeat keepalive — non misura RTT, indicatore latenza rimosso */ }
       else if (m.type==='device_connected')   { document.getElementById('waiting').style.display='none'; document.getElementById('p-ble').textContent='BLE ✓'; document.getElementById('p-ble').className='pill pt'; }
-      else if (m.type==='device_disconnected'){ document.getElementById('waiting').style.display='flex'; }
+      else if (m.type==='device_disconnected'){ if (!Object.keys(athleteState).length) document.getElementById('waiting').style.display='flex'; }
+      // Fix #2: il server invia 'athletes' — senza questo ramo nessun pannello atleta veniva creato
+      else if (m.type==='athletes')    { document.getElementById('waiting').style.display = m.list.length ? 'none' : 'flex'; handleAthletesMsg(m); }
+      else if (m.type==='athlete_update'){ const st=athleteState[m.deviceId]; if (st) { st.name=m.athleteName;
+        const el=document.querySelector('#ap_'+m.deviceId.replace(/:/g,'')+' .athlete-name'); if (el) el.textContent=m.athleteName; } }
+      else if (m.type==='lap_event')   { toast(`LAP ${m.lap} ◎`,'#f0a020'); }
       else if (m.type==='history')     { m.frames.forEach(f=>ingest(f,false)); }
       else if (m.type==='cmd_echo')    { handleEcho(m); }
       else if (m.type==='cmd_error')   { toast('Device non connesso','#e83a50'); }
       else if (m.type==='lap_note')    { applyNote(m.lapNum, m.text); }
+      else if (m.type==='session_saved'){ toast(`Sessione salvata · ${m.lapCount} lap`,'#00c896'); if (histOpen) loadHistSessions(); }
+      else if (m.type==='session_synced'){ /* sessione trasferita al PC — nessuna azione UI necessaria */ }
+      else if (m.type==='sync_status') { const p=document.getElementById('p-sync'); p.style.display=m.pending?'inline':'none'; p.textContent=`⟳ ${m.pending}`; }
+      else if (m.type==='sync_progress'){ const p=document.getElementById('p-sync'); p.style.display=m.remaining?'inline':'none'; p.textContent=`⟳ ${m.remaining}`; }
+      else if (m.type==='sync_complete'){ const p=document.getElementById('p-sync'); p.style.display='none'; toast(`Sync completata · ${m.synced} sessioni`,'#00c896'); }
       else if (m.CdA !== undefined) { document.getElementById('waiting').style.display='none';
         updateAthletePanel(m); }
     } catch{}
@@ -490,7 +503,7 @@ function ingest(f, live) {
   const lp = laps[lap];
   lp.n++; lp.sumCdA+=f.CdA; lp.sumPwr+=(f.pwr||0);
   lp.sumSpd+=(f.spd||0); lp.sumHr+=(f.hr||0);
-  const paero = Math.round((f.pwr||0)*(f.pctAero||76)/100);
+  const paero = Math.round((f.pwr||0)*(f.pctAero ?? 76)/100);
   lp.sumAero+=paero; lp.sumWind+=(f.wind||0); lp.sumCad+=(f.cad||0);
   lp.pts.push({s:(f.t-lp.startTs)/1000, CdA:f.CdA, pwr:f.pwr||0, hr:f.hr||0,
                spd:f.spd||0, wind:f.wind||0, aero:paero, cad:f.cad||0});
@@ -572,7 +585,7 @@ function updateUI(f, paero, lap) {
   $('#av-pwr').textContent = sess.avPwr;
   $('#pk-aero').textContent= sess.pkAero;
   $('#av-aero').textContent= sess.avAero;
-  $('#pct-aero').textContent= (f.pctAero||76)+'%';
+  $('#pct-aero').textContent= (f.pctAero ?? 76)+'%';
   $('#pk-hr').textContent  = sess.pkHr;
   $('#av-hr').textContent  = sess.avHr;
 
@@ -586,7 +599,7 @@ function updateUI(f, paero, lap) {
   $('#r-frames').textContent   = sess.frames;
 
   // Power breakdown
-  const pctA = f.pctAero||76, pctR = Math.max(0, Math.round((f.pwr>0?(f.pwr-paero)/f.pwr*100:0)));
+  const pctA = f.pctAero ?? 76, pctR = Math.max(0, Math.round((f.pwr>0?(f.pwr-paero)/f.pwr*100:0)));
   document.getElementById('pwr-breakdown').innerHTML = [
     ['Aerodinamica', pctA, '#e83a50'],
     ['Rolling',      pctR, '#3a8cf0'],
@@ -624,7 +637,11 @@ function updateUI(f, paero, lap) {
   mainChart.update('none');
   sparkChart.update('none');
   if (uiTick % 20 === 0) updateLapList();
-  if (uiTick % 50 === 0) { updateLapBars(); updateCompare(); updateOverlay(); updateTable(); }
+  if (uiTick % 50 === 0) {
+    updateLapBars(); updateCompare(); updateOverlay(); updateTable();
+    // Fix #18: aggiorna il radar live solo quando la sua tab è visibile (evita lavoro inutile)
+    if (document.getElementById('tab-radar').style.display !== 'none') updateRadar();
+  }
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────────
@@ -773,7 +790,7 @@ function updateRadar() {
     wind: laps[n].sumWind/laps[n].n,
     cad:  laps[n].sumCad/laps[n].n,
   }));
-  const norm=(val,min,max,inv)=>{const r=(val-min)/(max-min||1);return Math.round((inv?1-r:r)*100);};
+  const norm=(val,min,max,inv)=>{const r=(val-min)/((max-min)||1);return Math.round((inv?1-r:r)*100);};
   const get=(k,inv)=>S.map(s=>norm(s[k],Math.min(...S.map(x=>x[k])),Math.max(...S.map(x=>x[k])),inv));
   const axes=['CdA\neffic.','Potenza','Velocità','FC ctrl','Vento','Cadenza'];
   const datasets=ns.map((n,i)=>({label:`LAP ${n}`,
@@ -852,7 +869,7 @@ function updateTable() {
   // Note row
   const noteRow=document.createElement('tr');
   noteRow.innerHTML=`<td style="color:var(--dim)">Note</td>`+
-    S.map(s=>`<td><input class="note-input" style="width:100%" value="${(lapNotes[s.n]||'').replace(/"/g,'&quot;')}"
+    S.map(s=>`<td><input class="note-input" style="width:100%" value="${esc(lapNotes[s.n]||'')}"
       placeholder="..." oninput="saveLapNote(${s.n},this.value)"
       onfocus="this.style.color='var(--text)'" onblur="this.style.color='var(--dim)'"></td>`).join('');
   tbody.appendChild(noteRow);
@@ -875,7 +892,7 @@ function updateLapList() {
         <span style="color:${col};font-weight:700">${n}${n===curLap?'▶':''}</span>
         <span style="color:${col}">${avg}</span><span>${pwr}</span><span style="color:var(--red)">${hr}</span>
       </div>
-      <input class="note-input" value="${(lapNotes[n]||'').replace(/"/g,'&quot;')}"
+      <input class="note-input" value="${esc(lapNotes[n]||'')}"
         placeholder="Nota lap ${n}..." oninput="saveLapNote(${n},this.value)">`;
     el.appendChild(div);
   });
@@ -895,31 +912,34 @@ function switchTab(name, btn) {
 }
 
 // Coach commands
-function sendCmd(action) {
+// Fix #14: unica definizione di sendCmd. targetDeviceId esplicito (bottoni per-atleta)
+// ha precedenza; altrimenti usa focusDevice (atleta del pannello centrale). Senza
+// nessuno dei due → deviceId omesso = broadcast a tutti (semantica del Pi).
+function sendCmd(action, targetDeviceId) {
   if (ws?.readyState!==1) { toast('Nessuna connessione','#e83a50'); return; }
-  // Fix D2: in multi-atleta, includi deviceId per non broadcastare a tutti
-  // I lap del coach finiscono solo sull'atleta selezionato
+  const target = targetDeviceId || focusDevice || null;
   const msg = {type:'cmd', action};
-  if (focusDevice) msg.deviceId = focusDevice;
+  if (target) msg.deviceId = target;
   ws.send(JSON.stringify(msg));
   const c={lap:'#f0a020',start:'#00c896',stop:'#e83a50'};
-  const l={lap:'LAP inviato ◎',start:'START inviato',stop:'STOP inviato'};
-  toast(l[action]||action, c[action]);
-  if (action==='lap') { const b=$('btn-lap'); b.style.transform='scale(1.15)'; setTimeout(()=>b.style.transform='',300); }
+  const l={lap:'LAP ◎',start:'▶ START',stop:'⬛ STOP'};
+  const who = target ? (athleteState[target]?.name || target) : 'tutti';
+  toast(`${l[action]||action} → ${who}`, c[action]);
+  if (action==='lap') { const b=$('btn-lap'); if (b) { b.style.transform='scale(1.15)'; setTimeout(()=>b.style.transform='',300); } }
 }
 function handleEcho(m) {
   if (m.action==='lap') { lapBounds.push(sBuf.filter(v=>v!==null).length-1); toast('LAP segnato','#f0a020'); }
 }
 
-// Notes
-const lapNotes={};
+// Notes (lapNotes dichiarato in alto a riga ~427 — niente ridichiarazione qui)
 function saveLapNote(n, t, deviceId) {
   lapNotes[n] = t;
   // Fix: include deviceId — il Pi usa msg.deviceId per associare la nota all'atleta corretto
-  const target = deviceId || Object.keys(athleteState)[0] || null;
+  const target = deviceId || focusDevice || Object.keys(athleteState)[0] || null;
   if (ws?.readyState === 1)
     ws.send(JSON.stringify({ type:'lap_note', lapNum:n, text:t, deviceId:target }));
-  document.querySelectorAll(`[data-lap="${n}"]`).forEach(el => {
+  // Fix #13: gli input non hanno data-lap — selettore allineato ad applyNote
+  document.querySelectorAll(`input[oninput*="saveLapNote(${n},"]`).forEach(el => {
     if (document.activeElement !== el) el.value = t;
   });
 }
@@ -942,9 +962,11 @@ document.addEventListener('keydown', e=>{
   if (e.key==='x') sendCmd('stop');
 });
 
-// Helpers
-const $ = id => document.getElementById(id);
+// Helpers (fmt — $ è definito in cima allo script, vedi sotto la State section)
 const fmt = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+// Fix #15: escape XSS completo per testo inserito in innerHTML (note lap, nome atleta)
+const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
 // Clock
 setInterval(()=>{ document.getElementById('clock').textContent=new Date().toLocaleTimeString('it-IT'); },1000);
@@ -993,7 +1015,7 @@ function createAthletePanel(deviceId, name, color, safeId) {
   div.innerHTML = `
     <div class="athlete-header">
       <span class="athlete-dot" style="background:${color}"></span>
-      <span class="athlete-name" style="color:${color}">${name}</span>
+      <span class="athlete-name" style="color:${color}">${esc(name)}</span>
       <span class="athlete-cda" id="ac_cda_${safeId}" style="color:${color}">—.———</span>
     </div>
     <div class="athlete-sub">
@@ -1088,17 +1110,6 @@ function updateAthletePanel(frame) {
   }
 }
 
-// Patch sendCmd per supportare deviceId target
-const _origSendCmd = sendCmd;
-sendCmd = function(action, targetDeviceId) {
-  if (ws?.readyState !== 1) { toast('Nessuna connessione al Pi', '#e83a50'); return; }
-  ws.send(JSON.stringify({ type:'cmd', action, deviceId: targetDeviceId || null }));
-  const c={lap:'#f0a020',start:'#00c896',stop:'#e83a50'};
-  const l={lap:'LAP ◎',start:'▶ START',stop:'⬛ STOP'};
-  const who = targetDeviceId ? (athleteState[targetDeviceId]?.name || targetDeviceId) : 'tutti';
-  toast(`${l[action]||action} → ${who}`, c[action]);
-};
-
 // ── Storico sessioni ───────────────────────────────────────────────────────
 let histOpen = false;
 const ghostLaps = {};   // { 'sessId_lapN': { color, pts, meta } }
@@ -1155,7 +1166,7 @@ async function loadHistSessions() {
               </div>
             </div>
             ${lap.notes ? `<div style="font-size:9px;color:var(--dim);padding:2px 8px 4px;
-              font-style:italic">${lap.notes}</div>` : ''}
+              font-style:italic">${esc(lap.notes)}</div>` : ''}
           `).join('')}
         </div>`;
       el.appendChild(div);
