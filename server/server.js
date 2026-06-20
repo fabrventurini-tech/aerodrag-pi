@@ -320,7 +320,11 @@ wss.on('connection', (ws, req) => {
         const frame = JSON.parse(raw.toString());
         if (frame.type === 'hello') {
           // hello: { type:'hello', device:'AA:BB:...', athlete:'Mario', fw:'1.3.0' }
-          const devId = frame.device || ip;
+          // Contract §3: `device` obbligatorio e MAC-valido. Niente fallback su
+          // `ip` (sarebbe un'identità anonima/non-MAC): hello senza MAC valido
+          // viene ignorato, coerente con la validazione dei frame all'ingestione.
+          if (typeof frame.device !== 'string' || !MAC_RE.test(frame.device)) return;
+          const devId = frame.device;
           const name  = frame.athlete || 'Atleta';
           const fw    = frame.fw || '';
           deviceWsMap.set(ws, { deviceId: devId, athleteName: name, fw });
@@ -447,7 +451,11 @@ wss.on('connection', (ws, req) => {
           broadcast({ type:'cmd_echo', action:msg.action, deviceId:targetDevId });
         }
         if (msg.type === 'lap_note') {
-          sessionSetNote(msg.deviceId || 'unknown', msg.lapNum, msg.text);
+          // Contract §3/§4: nessuna identità anonima. Senza deviceId MAC-valido
+          // la nota non è attribuibile a una sessione → ignorala (niente
+          // fallback 'unknown', niente relay).
+          if (typeof msg.deviceId !== 'string' || !MAC_RE.test(msg.deviceId)) return;
+          sessionSetNote(msg.deviceId, msg.lapNum, msg.text);
           const json = JSON.stringify(msg);
           coachClients.forEach(c => { if (c !== ws && c.readyState === 1) c.send(json); });
         }
