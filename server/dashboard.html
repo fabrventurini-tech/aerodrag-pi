@@ -909,7 +909,7 @@ function updateTable() {
   const noteRow=document.createElement('tr');
   noteRow.innerHTML=`<td style="color:var(--dim)">Note</td>`+
     S.map(s=>`<td><input class="note-input" style="width:100%" value="${(lapNotes[s.n]||'').replace(/"/g,'&quot;')}"
-      placeholder="..." oninput="saveLapNote(${s.n},this.value)"
+      placeholder="..." oninput="saveLapNote(${s.n},this.value,'${focusDevice||''}')"
       onfocus="this.style.color='var(--text)'" onblur="this.style.color='var(--dim)'"></td>`).join('');
   tbody.appendChild(noteRow);
   tbl.appendChild(tbody);
@@ -932,7 +932,7 @@ function updateLapList() {
         <span style="color:${col}">${avg}</span><span>${pwr}</span><span style="color:var(--red)">${hr}</span>
       </div>
       <input class="note-input" value="${(lapNotes[n]||'').replace(/"/g,'&quot;')}"
-        placeholder="Nota lap ${n}..." oninput="saveLapNote(${n},this.value)">`;
+        placeholder="Nota lap ${n}..." oninput="saveLapNote(${n},this.value,'${focusDevice||''}')">`;
     el.appendChild(div);
   });
 }
