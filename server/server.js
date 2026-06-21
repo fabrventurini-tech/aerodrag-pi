@@ -23,7 +23,11 @@ const USB_IP       = process.env.USB_IP  || '192.168.7.1';
 const WIFI_IP      = process.env.WIFI_IP || '192.168.8.1';
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 const PENDING_FILE = path.join(SESSIONS_DIR, '_pending.json');
-const PC_IP        = '192.168.7.2';
+// PC_IP: indirizzo riservato per il PC coach sulla rete USB. setup.sh configura
+// il DHCP del Pi (range .2–.10) con .2 come PRIMO indirizzo assegnato → riservato
+// al PC coach. Se il PC ottiene un IP diverso, il push live (sendToPc) non arriva
+// ma il pc-receiver fa comunque il pull da /api/sessions (recupero). v0.3.0 audit #16.
+const PC_IP        = process.env.PC_IP || '192.168.7.2';
 const PC_PORT      = 8081;
 
 // Contract §3 (v0.1.2): il campo `device` dei frame DEVE essere un MAC valido
@@ -86,23 +90,32 @@ function sessionAddFrame(frame) {
 
   const deviceId = frame.device;
   if (!sessions.has(deviceId)) {
+    // v0.3.0 audit #16: niente sessioni fantasma — crea solo se il device è
+    // effettivamente connesso (in deviceWsMap). Evita che un frame in coda
+    // (race con ws close) o senza hello materializzi una sessione orfana.
+    const connected = [...deviceWsMap.values()].some(i => i.deviceId === deviceId);
+    if (!connected) return;
     sessionStart(deviceId, frame.athlete || 'Atleta');
   }
   const sess = sessions.get(deviceId);
   // Contract v0.3.0 §3/§5: timestamp oggettivo. Memorizza il primo `tUtc` valido
-  // (epoch UTC ms; 0/assente se l'orologio del device non è impostato) → base del
-  // `ts` di sessione, per ordinamento/dedup assoluti. Fallback a serverTs altrimenti.
-  if (!sess.tsUtc && typeof frame.tUtc === 'number' && frame.tUtc > 0) sess.tsUtc = frame.tUtc;
+  // (epoch UTC ms; soglia 2020 = 1577836800000, altrimenti orologio non impostato)
+  // → base del `ts` di sessione per ordinamento/dedup assoluti; fallback a serverTs.
+  if (!sess.tsUtc && typeof frame.tUtc === 'number' && frame.tUtc >= 1577836800000) sess.tsUtc = frame.tUtc;
+  // v0.3.0 audit #16: ancora i tempi del lap al serverTs (wall-clock del Pi), non a
+  // frame.t (ms-da-boot): robusto al reboot del device (niente `s` negativi/azzerati).
+  const tRef = frame.serverTs || Date.now();
   const lap  = frame.lap || 1;
   if (!sess.laps[lap])
     sess.laps[lap] = { n:0, sumCdA:0, sumPwr:0, sumSpd:0, sumHr:0,
-                       sumWind:0, sumCad:0, startTs:frame.t, pts:[] };
+                       sumWind:0, sumCad:0, startTs:tRef, pts:[] };
   const lp = sess.laps[lap];
   lp.n++; lp.sumCdA+=frame.CdA; lp.sumPwr+=(frame.pwr||0);
   lp.sumSpd+=(frame.spd||0); lp.sumHr+=(frame.hr||0);
   lp.sumWind+=(frame.wind||0); lp.sumCad+=(frame.cad||0);
-  if (lp.n % 5 === 0 && lp.pts.length < 2000)   // cap a 2000 pt/lap (~16min a 2pt/s)
-    lp.pts.push({ s:Math.round((frame.t-lp.startTs)/1000),
+  // Campiona 1 punto ogni 5 frame includendo il PRIMO (n=1 → s≈0): (n-1)%5
+  if ((lp.n - 1) % 5 === 0 && lp.pts.length < 2000)   // cap 2000 pt/lap
+    lp.pts.push({ s:Math.round((tRef-lp.startTs)/1000),
       CdA:+frame.CdA.toFixed(4), pwr:frame.pwr||0, spd:+(frame.spd||0).toFixed(1),
       hr:frame.hr||0, wind:+(frame.wind||0).toFixed(2), cad:frame.cad||0,
       pitch:+(frame.pitch||0).toFixed(1), rho:+(frame.rho||0).toFixed(4) });
@@ -208,6 +221,11 @@ function probePc() {
 setInterval(probePc, 60_000);
 setTimeout(probePc, 5000);
 
+// Cache per /api/sessions (v0.3.0 audit #16): evita readFileSync+JSON.parse di
+// fino a 100 file ad ogni richiesta (freeze su Pi Zero 2W). Ricostruita solo
+// quando cambia l'insieme dei file; `synced` (dipende da pending) si ricalcola.
+let sessionsCacheSig = '', sessionsCacheBuilt = [];
+
 // ─── HTTP ─────────────────────────────────────────────────────────────────────
 const httpServer = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
@@ -241,24 +259,29 @@ const httpServer = http.createServer((req, res) => {
       const files = fs.readdirSync(SESSIONS_DIR)
         .filter(f => f.endsWith('.json') && f !== '_pending.json')
         .sort().reverse().slice(0, 100);
+      const sig = files.join('|');
+      if (sig !== sessionsCacheSig) {   // ricostruisci solo se l'insieme file è cambiato
+        sessionsCacheBuilt = files.map(f => {
+          try {
+            const d = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
+            return {
+              file:f, id:f.replace('.json',''), ts:d.ts,
+              date:new Date(d.ts).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}),
+              time:new Date(d.ts).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}),
+              deviceId:d.deviceId||'', athleteName:d.athleteName||'Atleta',
+              lapCount:d.laps?.length||0,
+              laps:(d.laps||[]).map(l=>({
+                lapNum:l.lapNum, avgCdA:l.avgCdA, bestCdA:l.bestCdA,
+                avgPowerW:l.avgPowerW, avgSpeedKmh:l.avgSpeedKmh,
+                avgHr:l.avgHr, avgCad:l.avgCad, durationS:l.durationS, notes:l.notes,
+              })),
+            };
+          } catch { return null; }
+        }).filter(Boolean);
+        sessionsCacheSig = sig;
+      }
       const pending = pendingLoad();
-      const list = files.map(f => {
-        try {
-          const d = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
-          return {
-            id:f.replace('.json',''), ts:d.ts,
-            date:new Date(d.ts).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'}),
-            time:new Date(d.ts).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}),
-            deviceId:d.deviceId||'', athleteName:d.athleteName||'Atleta',
-            lapCount:d.laps?.length||0, synced:!pending.includes(f),
-            laps:(d.laps||[]).map(l=>({
-              lapNum:l.lapNum, avgCdA:l.avgCdA, bestCdA:l.bestCdA,
-              avgPowerW:l.avgPowerW, avgSpeedKmh:l.avgSpeedKmh,
-              avgHr:l.avgHr, avgCad:l.avgCad, durationS:l.durationS, notes:l.notes,
-            })),
-          };
-        } catch { return null; }
-      }).filter(Boolean);
+      const list = sessionsCacheBuilt.map(({ file, ...rest }) => ({ ...rest, synced:!pending.includes(file) }));
       res.writeHead(200, { 'Content-Type':'application/json' });
       return res.end(JSON.stringify(list));
     } catch { res.writeHead(500); return res.end('[]'); }
@@ -346,9 +369,14 @@ wss.on('connection', (ws, req) => {
         }
         if (frame.type === 'ping') return;
 
-        const devInfo = deviceWsMap.get(ws) || { deviceId:'unknown', athleteName:'Atleta' };
+        const devInfo = deviceWsMap.get(ws) || { athleteName:'Atleta' };
         frame.device  = frame.device  || devInfo.deviceId;
         frame.athlete = frame.athlete || devInfo.athleteName;
+
+        // Contract §3 (v0.3.0, audit #16): rifiuta all'ingestione OGNI frame senza
+        // `device` MAC valido, PRIMA di qualsiasi broadcast/buffer/sessione. Evita
+        // sessioni anonime e relay/history con chiave 'unknown'.
+        if (typeof frame.device !== 'string' || !MAC_RE.test(frame.device)) return;
 
         // Aggiorna il nome se l'app lo ha impostato dopo il hello
         if (frame.athlete && frame.athlete !== devInfo.athleteName) {
@@ -490,13 +518,30 @@ setInterval(() => {
   deviceWsMap.forEach((info, ws) => { if (ws?.readyState===1) ws.send(ping); });
 }, 15_000);
 
+// Reaper sessioni stale (v0.3.0 audit #16): chiude/scarta le sessioni il cui
+// ultimo frame è troppo vecchio (es. device sparito senza ws close pulito) → evita
+// leak della Map e sessioni mai chiuse. sessionEnd salva se ≥20 frame, altrimenti
+// scarta. Soglia oltre il keepalive device (15s) con margine.
+const SESSION_STALE_MS = 90_000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [deviceId, sess] of [...sessions]) {
+    if (now - (sess.lastSeen || 0) > SESSION_STALE_MS) {
+      console.log(`[reaper] sessione stale ${deviceId} (${Math.round((now-sess.lastSeen)/1000)}s) → chiusura`);
+      sessionEnd(deviceId);   // salva/scarta + sessions.delete
+      lastFrameByDevice.delete(deviceId);
+      frameHistory.delete(deviceId);
+    }
+  }
+}, 30_000);
+
 httpServer.listen(PORT, '0.0.0.0', () => {
   const pending = pendingLoad();
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`  AeroDrag Coach Server v4 — multi-atleta`);
   console.log(`  Porta: ${PORT}  |  Sessioni in coda: ${pending.length}`);
-  console.log(`  ESP32:       ws://${WIFI_IP}:${PORT}/device`);
-  console.log(`  App/iPhone:  ws://${WIFI_IP}:${PORT}/coach`);
-  console.log(`  Coach PC:    http://${USB_IP}:${PORT}/dashboard`);
+  console.log(`  ESP32 (uplink primario): ws://${WIFI_IP}:${PORT}/device`);
+  console.log(`  /coach: fallback legacy DEPRECATO (v0.3.0 — app solo-BLE)`);
+  console.log(`  Dashboard coach (USB):   http://${USB_IP}:${PORT}/dashboard`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 });

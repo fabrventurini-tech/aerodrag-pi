@@ -61,9 +61,22 @@ const server = http.createServer((req, res) => {
     if (!/^session_\d+_[A-Fa-f0-9]+\.json$/.test(filename)) {
       res.writeHead(400); return res.end('Invalid');
     }
-    let body = '';
-    req.on('data', c => body += c);
+    // v0.3.0 audit #16: cap sul body (DoS) — il socket è in ascolto su 0.0.0.0,
+    // un POST illimitato esaurirebbe la memoria. Limite 16 MB come nel coach.
+    const MAX_BODY = 16 * 1024 * 1024;
+    let body = '', size = 0, aborted = false;
+    req.on('data', c => {
+      size += c.length;
+      if (size > MAX_BODY) {
+        aborted = true;
+        res.writeHead(413); res.end('Payload Too Large');
+        req.destroy();
+        return;
+      }
+      body += c;
+    });
     req.on('end', () => {
+      if (aborted) return;
       fs.writeFile(path.join(SESSIONS_DIR, filename), body, err => {
         if (err) { res.writeHead(500); return res.end('Error'); }
         try {
