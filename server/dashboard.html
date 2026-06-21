@@ -4,17 +4,27 @@
 <meta charset="UTF-8">
 <title>AeroDrag Coach Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#07090f;--s1:#0f1420;--s2:#171e2e;--s3:#1e2840;
-  --teal:#00c896;--amber:#f0a020;--red:#e83a50;--blue:#3a8cf0;
-  --purple:#8b5cf6;--green:#22c55e;
-  --muted:#4a5a7a;--text:#c8d8f0;--dim:#7a90b8;
-  --border:rgba(100,140,200,0.1);
+  /* Design tokens — palette unificata (contract v0.2.3, redesign #12) */
+  --accent:#00d9a3; --power:#f5a623; --speed:#4d9fff; --alert:#ff4d6a;
+  --positive:#22c55e; --text:#dbe6f6; --text-dim:#8398bd; --muted:#46587c;
+  --surface:#0f1420; --track:#1e2840; --bg:#07090f;
+  --border:rgba(120,160,220,0.12); --radius-card:14px;
+  /* alias retro-compatibili con le classi/markup esistenti */
+  --s1:var(--surface); --s2:#171e2e; --s3:var(--track);
+  --teal:var(--accent); --amber:var(--power); --red:var(--alert);
+  --blue:var(--speed); --purple:#8b5cf6; --green:var(--positive);
+  --dim:var(--text-dim);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
-body{background:var(--bg);color:var(--text);font-family:'SF Mono','Fira Code',monospace;font-size:12px}
+body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:12px}
+/* Numeri in mono tabellare (A.1) */
+.cda-val,.cda-sub,.mval,.mc-live,.mc-sub,.athlete-cda,.athlete-sub,.sv,
+#cda-big,.cmp-tbl td,.note-input{font-family:'JetBrains Mono','SF Mono',monospace;font-variant-numeric:tabular-nums}
 
 .root{display:grid;grid-template-rows:44px 36px 1fr;height:100vh}
 
@@ -274,7 +284,7 @@ body{background:var(--bg);color:var(--text);font-family:'SF Mono','Fira Code',mo
         </div>
         <div class="mcard">
           <div class="mc-lbl">P. Aero</div>
-          <div class="mc-live" style="color:var(--red)" id="m-aero">—</div>
+          <div class="mc-live" style="color:var(--power)" id="m-aero">—</div>
           <div class="mc-sub"><span class="pk">↑<span id="pk-aero">—</span></span><span class="av">~<span id="av-aero">—</span></span><span style="color:var(--muted)" id="pct-aero">—%</span></div>
         </div>
         <div class="mcard">
@@ -283,9 +293,18 @@ body{background:var(--bg);color:var(--text);font-family:'SF Mono','Fira Code',mo
           <div class="mc-sub"><span class="pk">↑<span id="pk-hr">—</span></span><span class="av">~<span id="av-hr">—</span></span><span style="color:var(--purple)" id="m-cad">— rpm</span></div>
         </div>
         <div class="mcard">
-          <div class="mc-lbl">Vento · 🔋</div>
-          <div class="mc-live" style="color:var(--blue)" id="m-wind">—</div>
-          <div class="mc-sub"><span style="color:var(--muted)" id="m-bat">—%</span><span style="color:var(--dim)" id="m-dist">—km</span></div>
+          <div class="mc-lbl">Vento · Batteria · Dist</div>
+          <div class="mc-live" style="color:var(--speed)" id="m-wind">—</div>
+          <div class="mc-sub">
+            <span style="color:var(--text-dim);display:inline-flex;align-items:center;gap:3px">
+              <svg width="13" height="9" viewBox="0 0 24 16" fill="none" aria-hidden="true">
+                <rect x="1" y="2.5" width="19" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                <rect x="21" y="6" width="2.5" height="4" rx="1" fill="currentColor"/>
+                <rect x="3" y="4.5" width="11" height="7" rx="1" fill="currentColor"/>
+              </svg><span id="m-bat">—%</span>
+            </span>
+            <span style="color:var(--text-dim)" id="m-dist">—km</span>
+          </div>
         </div>
       </div>
 
@@ -301,15 +320,23 @@ body{background:var(--bg);color:var(--text);font-family:'SF Mono','Fira Code',mo
       <div style="padding:10px;display:flex;flex-direction:column;gap:10px" id="live-charts">
         <div class="cc">
           <div class="cc-hdr">
-            <span class="cc-title">CdA · Potenza · Velocità · FC — sessione live</span>
+            <span class="cc-title">CdA nel tempo — ultimi ~90s</span>
             <div class="legend">
-              <span class="leg"><span style="background:var(--teal)"></span>CdA×100</span>
-              <span class="leg"><span style="background:var(--amber);opacity:.7"></span>W/10</span>
-              <span class="leg"><span style="background:var(--blue);opacity:.7"></span>km/h</span>
-              <span class="leg"><span style="background:var(--red);opacity:.6;border-style:dashed"></span>FC/10</span>
+              <span class="leg"><span style="background:var(--accent)"></span>CdA live</span>
+              <span class="leg"><span style="background:var(--text-dim);height:0;border-top:2px dashed var(--text-dim)"></span>Best</span>
             </div>
           </div>
-          <div style="height:170px"><canvas id="mainChart"></canvas></div>
+          <div style="height:150px"><canvas id="mainChart"></canvas></div>
+        </div>
+        <div class="cc">
+          <div class="cc-hdr">
+            <span class="cc-title">Potenza &amp; velocità</span>
+            <div class="legend">
+              <span class="leg"><span style="background:var(--power)"></span>Potenza (W)</span>
+              <span class="leg"><span style="background:var(--speed)"></span>Velocità (km/h)</span>
+            </div>
+          </div>
+          <div style="height:120px"><canvas id="pvChart"></canvas></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <div class="cc">
@@ -515,9 +542,9 @@ function ingest(f, live) {
   sess.dist  += (f.spd||0)/3.6*0.5;
 
   const push = (a,v) => { a.push(v); if (a.length>N) a.shift(); };
-  push(cBuf, +(f.CdA*100).toFixed(2));
-  push(pBuf, +((f.pwr||0)/10).toFixed(1));
-  push(sBuf, +(f.spd||0).toFixed(1));
+  push(cBuf, +(f.CdA).toFixed(4));        // CdA grezzo → asse Y reale
+  push(pBuf, (f.pwr||0));                  // Watt pieni → asse Y sinistro
+  push(sBuf, +(f.spd||0).toFixed(1));      // km/h → asse Y destro
   push(hBuf, +((f.hr||0)/10).toFixed(1));
   push(wBuf, +(f.wind||0).toFixed(2));
   push(aBuf, +(paero/10).toFixed(1));
@@ -589,9 +616,9 @@ function updateUI(f, paero, lap) {
   // Power breakdown
   const pctA = f.pctAero||76, pctR = Math.max(0, Math.round((f.pwr>0?(f.pwr-paero)/f.pwr*100:0)));
   document.getElementById('pwr-breakdown').innerHTML = [
-    ['Aerodinamica', pctA, '#e83a50'],
-    ['Rolling',      pctR, '#3a8cf0'],
-    ['Gravità/altro',Math.max(0,100-pctA-pctR), '#4a5a7a'],
+    ['Aerodinamica', pctA, '#f5a623'],
+    ['Rolling',      pctR, '#4d9fff'],
+    ['Gravità/altro',Math.max(0,100-pctA-pctR), '#46587c'],
   ].map(([l,p,c])=>`
     <div style="margin-bottom:6px">
       <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px">
@@ -622,7 +649,10 @@ function updateUI(f, paero, lap) {
   if (f.spd>0) { $('#p-spd').textContent='SPD ✓';  $('#p-spd').className='pill pt'; }
 
   // Charts and lap list every N frames
-  mainChart.update('none');
+  // Linea "best" tratteggiata sul grafico CdA (derivata client-side)
+  cdaChart.data.datasets[1].data = Array(N).fill(sess.btCdA===9 ? null : sess.btCdA);
+  cdaChart.update('none');
+  pvChart.update('none');
   sparkChart.update('none');
   if (uiTick % 20 === 0) updateLapList();
   if (uiTick % 50 === 0) { updateLapBars(); updateCompare(); updateOverlay(); updateTable(); }
@@ -647,25 +677,50 @@ const lapLinePlugin = {id:'ll', afterDraw(chart){
   });
 }};
 
-const mainChart = new Chart($('mainChart'),{
+// Etichette tempo (-Ns … ora), N campioni @ 2 Hz
+const timeLabels = Array.from({length:N},(_,i)=> (i%60===0)?`-${Math.round((N-1-i)/2)}s`:'');
+
+// Grafico 1 — CdA nel tempo: asse Y reale (m²) + linea best tratteggiata + area
+const cdaChart = new Chart($('mainChart'),{
   type:'line',
-  data:{labels:Array(N).fill(''),datasets:[
-    {label:'CdA×100',data:cBuf,borderColor:'#00c896',borderWidth:2,pointRadius:0,fill:false,tension:.35},
-    {label:'W/10',   data:pBuf,borderColor:'#f0a020',borderWidth:1.5,pointRadius:0,fill:false,tension:.3,borderDash:[4,3]},
-    {label:'km/h',   data:sBuf,borderColor:'#3a8cf0',borderWidth:1.5,pointRadius:0,fill:false,tension:.3,borderDash:[2,4]},
-    {label:'FC/10',  data:hBuf,borderColor:'#e83a50',borderWidth:1,  pointRadius:0,fill:false,tension:.3,borderDash:[6,4]},
+  data:{labels:timeLabels,datasets:[
+    {label:'CdA',data:cBuf,borderColor:'#00d9a3',borderWidth:2,pointRadius:0,
+     fill:true,backgroundColor:'rgba(0,217,163,.08)',tension:.35},
+    {label:'Best',data:Array(N).fill(null),borderColor:'#8398bd',borderWidth:1,
+     pointRadius:0,fill:false,borderDash:[5,4],tension:0},
   ]},
   options:{responsive:true,maintainAspectRatio:false,animation:false,
     plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,
-      backgroundColor:'rgba(15,20,32,.92)',titleColor:'#7a90b8',bodyColor:'#c8d8f0',
-      callbacks:{label:ctx=>{const v=ctx.raw;if(!v)return;
-        const lbls={'CdA×100':`CdA: ${(v/100).toFixed(4)}`,'W/10':`Potenza: ${(v*10).toFixed(0)} W`,
-                    'km/h':`Velocità: ${v} km/h`,'FC/10':`FC: ${(v*10).toFixed(0)} bpm`};
-        return lbls[ctx.dataset.label]||'';
-      }}}},
-    scales:{x:{display:false},y:{min:20,max:45,ticks:{color:'#4a5a7a',font:{size:9}},
-    grid:{color:'rgba(100,140,200,.06)'}}}},
+      backgroundColor:'rgba(15,20,32,.92)',titleColor:'#8398bd',bodyColor:'#dbe6f6',
+      callbacks:{label:ctx=>ctx.raw==null?'':`${ctx.dataset.label}: ${(+ctx.raw).toFixed(4)} m²`}}},
+    scales:{
+      x:{display:true,ticks:{color:'#46587c',font:{size:9},maxRotation:0,autoSkip:false},
+         grid:{color:'rgba(120,160,220,.05)'}},
+      y:{min:0.18,max:0.34,ticks:{color:'#46587c',font:{size:9},stepSize:0.03,
+         callback:v=>(+v).toFixed(2)},grid:{color:'rgba(120,160,220,.06)'},
+         title:{display:true,text:'CdA (m²)',color:'#46587c',font:{size:9}}}}},
   plugins:[lapLinePlugin]
+});
+
+// Grafico 2 — Potenza & velocità: doppio asse Y (W sinistra, km/h destra)
+const pvChart = new Chart($('pvChart'),{
+  type:'line',
+  data:{labels:timeLabels,datasets:[
+    {label:'Potenza',data:pBuf,borderColor:'#f5a623',borderWidth:1.8,pointRadius:0,fill:false,tension:.3,yAxisID:'y'},
+    {label:'Velocità',data:sBuf,borderColor:'#4d9fff',borderWidth:1.8,pointRadius:0,fill:false,tension:.3,yAxisID:'y1'},
+  ]},
+  options:{responsive:true,maintainAspectRatio:false,animation:false,
+    plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,
+      backgroundColor:'rgba(15,20,32,.92)',titleColor:'#8398bd',bodyColor:'#dbe6f6',
+      callbacks:{label:ctx=>ctx.dataset.label==='Potenza'
+        ?`Potenza: ${(+ctx.raw).toFixed(0)} W`:`Velocità: ${(+ctx.raw).toFixed(1)} km/h`}}},
+    scales:{
+      x:{display:true,ticks:{color:'#46587c',font:{size:9},maxRotation:0,autoSkip:false},
+         grid:{color:'rgba(120,160,220,.05)'}},
+      y:{position:'left',beginAtZero:true,ticks:{color:'#f5a623',font:{size:9}},
+         grid:{color:'rgba(120,160,220,.06)'},title:{display:true,text:'W',color:'#f5a623',font:{size:9}}},
+      y1:{position:'right',beginAtZero:true,ticks:{color:'#4d9fff',font:{size:9}},
+         grid:{display:false},title:{display:true,text:'km/h',color:'#4d9fff',font:{size:9}}}}},
 });
 
 // Lap bar charts
@@ -1252,13 +1307,13 @@ function updateGhostOverlays() {
     chart.update('none');
   });
 
-  // Aggiorna anche il grafico principale (tab LIVE) con ghost CdA
-  if (mainChart) {
-    mainChart.data.datasets = mainChart.data.datasets.filter(d => !d._ghost);
+  // Aggiorna anche il grafico CdA (tab LIVE) con ghost CdA (scala reale m²)
+  if (cdaChart) {
+    cdaChart.data.datasets = cdaChart.data.datasets.filter(d => !d._ghost);
     ghosts.forEach(g => {
       const minLen = Math.min(g.pts.length, N);
-      const padded = Array(N - minLen).fill(null).concat(g.pts.slice(0,minLen).map(p=>+(p.CdA*100).toFixed(2)));
-      mainChart.data.datasets.push({
+      const padded = Array(N - minLen).fill(null).concat(g.pts.slice(0,minLen).map(p=>+(p.CdA).toFixed(4)));
+      cdaChart.data.datasets.push({
         _ghost: true,
         label: `Storico L${g.lapNum}`,
         data: padded,
@@ -1271,7 +1326,7 @@ function updateGhostOverlays() {
         yAxisID: 'y',
       });
     });
-    mainChart.update('none');
+    cdaChart.update('none');
   }
 
   // Aggiorna legenda comparison
