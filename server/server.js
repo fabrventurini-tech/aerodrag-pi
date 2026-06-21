@@ -3,12 +3,14 @@
  * Gestisce sessioni separate per device ID.
  * Ogni device si identifica con { device: "AA:BB:CC:DD:EE:FF", athlete: "Mario" }
  *
- * Contract: v0.1.3 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
+ * Contract: v0.3.0 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
  *   Frame telemetria atteso a 2 Hz; pctAero in percentuale 0-100;
  *   campi pitch/rho/lapEvent presenti nel frame e registrati nelle sessioni.
  *   §3: `device` obbligatorio e MAC-valido → frame senza identità rifiutati
  *   all'ingestione. §5: filename sessione sempre session_{ts}_{deviceIdHex}.json.
- *   (v0.1.3 aggiunge l'obbligo speculare lato produttore: nessun impatto sul pi.)
+ *   v0.3.0: /device è l'uplink primario (ESP32); /coach resta accettato come
+ *   fallback legacy DEPRECATO (non rimuovere). Frame `tUtc` (epoch UTC) additivo:
+ *   il `ts` di sessione deriva da tUtc se >0, altrimenti dal tempo del Pi.
  */
 
 const http = require('http');
@@ -87,6 +89,10 @@ function sessionAddFrame(frame) {
     sessionStart(deviceId, frame.athlete || 'Atleta');
   }
   const sess = sessions.get(deviceId);
+  // Contract v0.3.0 §3/§5: timestamp oggettivo. Memorizza il primo `tUtc` valido
+  // (epoch UTC ms; 0/assente se l'orologio del device non è impostato) → base del
+  // `ts` di sessione, per ordinamento/dedup assoluti. Fallback a serverTs altrimenti.
+  if (!sess.tsUtc && typeof frame.tUtc === 'number' && frame.tUtc > 0) sess.tsUtc = frame.tUtc;
   const lap  = frame.lap || 1;
   if (!sess.laps[lap])
     sess.laps[lap] = { n:0, sumCdA:0, sumPwr:0, sumSpd:0, sumHr:0,
@@ -113,6 +119,10 @@ function sessionEnd(deviceId) {
   const sess = sessions.get(deviceId);
   if (!sess || sess.frameCount < 20) { sessions.delete(deviceId); return; }
   const { startTs, athleteName, laps, lapNotes } = sess;
+  // Contract v0.3.0 §5: il `ts` di sessione deriva dal `tUtc` del device (epoch UTC)
+  // quando disponibile (>0), così è ordinabile/deduplicabile in assoluto; altrimenti
+  // fallback al tempo del Pi (startTs ≈ serverTs). Formato filename §5 invariato.
+  const sessionTs = sess.tsUtc > 0 ? sess.tsUtc : startTs;
   const lapNs = Object.keys(laps).map(Number).sort((a,b)=>a-b);
   const lapData = lapNs.map(n => {
     const lp = laps[n];
@@ -139,14 +149,14 @@ function sessionEnd(deviceId) {
   // sessione abbia un deviceId valido → safeId è sempre hex non vuoto; niente
   // token `unknown` né forma anonima senza suffisso.
   const safeId   = deviceId.replace(/:/g, '');
-  const filename = `session_${startTs}_${safeId}.json`;
-  const json     = JSON.stringify({ ts:startTs, deviceId, athleteName, laps:lapData }, null, 2);
+  const filename = `session_${sessionTs}_${safeId}.json`;
+  const json     = JSON.stringify({ ts:sessionTs, deviceId, athleteName, laps:lapData }, null, 2);
   fs.writeFile(path.join(SESSIONS_DIR, filename), json, err => {
     if (err) { console.error('[pi] Errore salvataggio:', err.message); sessions.delete(deviceId); return; }
     console.log(`[pi] Sessione salvata: ${athleteName} → ${filename}`);
     sendToPc(filename, json, ok => { if (!ok) pendingAdd(filename); });
   });
-  broadcast({ type:'session_saved', filename, deviceId, athleteName, ts:startTs, lapCount:lapData.length });
+  broadcast({ type:'session_saved', filename, deviceId, athleteName, ts:sessionTs, lapCount:lapData.length });
   sessions.delete(deviceId);
 }
 
