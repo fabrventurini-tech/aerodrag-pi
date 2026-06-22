@@ -457,7 +457,8 @@ wss.on('connection', (ws, req) => {
             // ota richiede url; rifiuta URL con sottostringhe che il parser strstr
             // del firmware scambierebbe per comandi (ultima linea di difesa)
             if (!msg.url || typeof msg.url !== 'string' ||
-                msg.url.includes('lap') || msg.url.includes('stop')) {
+                msg.url.includes('lap') || msg.url.includes('stop') ||
+                msg.url.includes('start')) {   // audit PI-4: coerente con la whitelist start/stop/lap
               ws.send(JSON.stringify({ type:'cmd_error', action:msg.action,
                 deviceId:targetDevId, reason:'ota_invalid_url' }));
               return;
