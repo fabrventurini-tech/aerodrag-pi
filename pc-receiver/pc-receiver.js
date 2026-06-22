@@ -26,10 +26,14 @@ function httpGet(url) {
       hostname: u.hostname, port: u.port || 80,
       path: u.pathname + u.search, method: 'GET', timeout: 5000,
     }, res => {
-      let body = '';
-      res.on('data', c => body += c);
-      res.on('end', () => resolve({ ok: res.statusCode < 400, status: res.statusCode,
-        json: () => Promise.resolve(JSON.parse(body)), text: () => Promise.resolve(body) }));
+      // audit PI-3: accumula in buffer e concatena una volta sola (evita O(n²))
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        resolve({ ok: res.statusCode < 400, status: res.statusCode,
+          json: () => Promise.resolve(JSON.parse(body)), text: () => Promise.resolve(body) });
+      });
     });
     req.on('error', reject);
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
@@ -40,6 +44,8 @@ function httpGet(url) {
 const PORT        = 8081;
 const PI_IP       = '192.168.7.1';   // IP Pi su USB ethernet
 const PI_PORT     = 8080;
+// Contract §3/§5: MAC valido = identità di sessione (per validare lo schema, PI-2)
+const MAC_RE      = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
 
 const SESSIONS_DIR = process.env.AERODRAG_SESSIONS_DIR
   || path.join(os.homedir(), 'Documents', 'AeroDrag', 'sessions');
@@ -77,13 +83,18 @@ const server = http.createServer((req, res) => {
     });
     req.on('end', () => {
       if (aborted) return;
+      // Contract v0.3.1 (audit PI-2): valida lo schema PRIMA di scrivere su disco
+      // (oggetto con ts:number, deviceId MAC valido, laps:array) → 400 e nessun file.
+      let d;
+      try { d = JSON.parse(body); } catch { res.writeHead(400); return res.end('Invalid JSON'); }
+      if (!d || typeof d.ts !== 'number' || typeof d.deviceId !== 'string'
+          || !MAC_RE.test(d.deviceId) || !Array.isArray(d.laps)) {
+        res.writeHead(400); return res.end('Invalid schema');
+      }
       fs.writeFile(path.join(SESSIONS_DIR, filename), body, err => {
         if (err) { res.writeHead(500); return res.end('Error'); }
-        try {
-          const d = JSON.parse(body);
-          const date = new Date(d.ts).toLocaleString('it-IT');
-          console.log(`[rx] ✓ ${filename} — ${d.laps?.length||0} lap (${date})`);
-        } catch {}
+        const date = new Date(d.ts).toLocaleString('it-IT');
+        console.log(`[rx] ✓ ${filename} — ${d.laps.length} lap (${date})`);
         res.writeHead(200); res.end('OK');
       });
     });
@@ -179,11 +190,14 @@ async function pullMissingSessions() {
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
-server.listen(PORT, '0.0.0.0', async () => {
+// Contract v0.3.1 (audit PI-1): bind alla SOLA interfaccia USB, non 0.0.0.0
+// (riduce la superficie d'attacco sulla LAN). Override con AERODRAG_BIND.
+const BIND_HOST = process.env.AERODRAG_BIND || '192.168.7.2';
+server.listen(PORT, BIND_HOST, async () => {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('  AeroDrag PC Receiver v2');
   console.log(`  Salva in: ${SESSIONS_DIR}`);
-  console.log(`  In ascolto su porta ${PORT}`);
+  console.log(`  In ascolto su ${BIND_HOST}:${PORT}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
   // Scarica subito le sessioni mancanti se il Pi è già connesso
@@ -198,6 +212,11 @@ server.on('error', err => {
   if (err.code === 'EADDRINUSE') {
     console.log(`[rx] Porta ${PORT} già occupata — receiver già attivo, esco`);
     process.exit(0);   // Fix R4: termina il processo per evitare loop sync inutile
+  } else if (err.code === 'EADDRNOTAVAIL') {
+    console.error(`[rx] Impossibile bindare ${BIND_HOST}:${PORT} — l'interfaccia USB`);
+    console.error(`     non ha quell'IP. Collega il cavo USB o imposta AERODRAG_BIND`);
+    console.error(`     all'IP della scheda USB del PC (es. set AERODRAG_BIND=192.168.7.8).`);
+    process.exit(1);
   } else {
     console.error('[rx] Errore:', err.message);
     process.exit(1);
