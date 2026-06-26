@@ -17,12 +17,20 @@
 
 ```
 iPhone atleta
-      ↓ WiFi "AeroDrag" (creato dal Pi)
-      ↓ ws://192.168.8.1:8080/coach
+      ╎ Bluetooth (BLE) — il telefono NON entra nel WiFi del Pi
+      ▼   e mantiene la propria rete internet
+Device AeroDrag (ESP32)
+      ↓ WiFi "AeroDrag" (creato dal Pi) — l'ESP32 è l'uplink primario
+      ↓ ws://192.168.8.1:8080/device
 Raspberry Pi Zero 2W
       ↓ USB (dati + alimentazione in un cavo solo)
 PC Coach → browser / Electron app → http://192.168.7.1:8080/dashboard
 ```
+
+> **Modello v0.3.0 (contract):** la telemetria live arriva dall'**ESP32** su
+> `/device`. Il telefono resta **solo-BLE** verso il proprio ESP32 (così non lascia
+> la rete internet). Il vecchio percorso `app → Pi /coach` è **deprecato** (fallback
+> legacy, es. app in sim senza device).
 
 Il cavo USB fa tre cose contemporaneamente:
 1. Alimenta il Pi (5V dal PC)
@@ -33,20 +41,21 @@ Il cavo USB fa tre cose contemporaneamente:
 
 ## Protocollo WebSocket
 
-Tre path WebSocket sul server `:8080` (contract v0.1.0):
+Tre path WebSocket sul server `:8080` (contract v0.3.x):
 
 | Path | Chi | Ruolo |
 |---|---|---|
-| `/device` | firmware ESP32 in WiFi diretto (confine B) | sorgente telemetria + riceve comandi |
-| `/coach` | app atleta `aerodrag-new` (relay BLE, confine C) | sorgente telemetria + riceve comandi |
+| `/device` | **firmware ESP32** (uplink WiFi primario, confine B) | sorgente telemetria + riceve comandi |
+| `/coach` | app `aerodrag-new` in **sim** (confine C — **DEPRECATO**, fallback legacy) | sorgente telemetria + riceve comandi |
 | `/` | dashboard (browser Pi + Electron coach, confine D) | sola visualizzazione frame/eventi + invia comandi |
 
-`/device` e `/coach` sono gestiti in modo identico: inviano `hello` + frame e
-ricevono `start`/`stop`/`lap`.
+`/device` e `/coach` sono gestiti in modo identico (`hello` + frame, ricevono
+`start`/`stop`/`lap`), ma in v0.3.0 **l'uplink atteso è `/device` dall'ESP32**;
+`/coach` resta accettato solo come fallback legacy.
 
-### App atleta → Pi (path: `/coach`)
+### Device (ESP32) → Pi (path: `/device`)
 
-Al momento della connessione, l'app invia un **hello**:
+Al momento della connessione, il device invia un **hello**:
 ```json
 { "type": "hello", "device": "AA:BB:CC:DD:EE:FF", "athlete": "Mario Rossi" }
 ```
@@ -78,10 +87,12 @@ Poi invia frame dati a **2 Hz**:
 > all'ingestione, così ogni sessione persistita ha sempre un `deviceId`
 > (filename `session_{ts}_{deviceIdHex}.json`, §5).
 
-### Pi → App atleta (comandi coach)
+### Pi → device (comandi coach)
 ```json
 { "type": "cmd", "action": "start" | "stop" | "lap" }
 ```
+Il Pi invia i comandi sul `/device`. In v0.3.0 raggiungono l'**app** tramite il
+**firmware** (BLE `COACH_LINK 0xaa0f`), non più sul `/coach` dell'app.
 
 ### Pi → Dashboard coach (path: `/`)
 Tutti i frame vengono ritrasmessi ai client browser/Electron connessi al path `/`.
@@ -162,15 +173,16 @@ Dopo il riavvio (attendere 30 secondi) il Pi è pronto.
    http://192.168.7.1:8080/dashboard
    ```
 
-4. **Sul telefono dell'atleta**, connetti il WiFi alla rete:
-   - SSID: `AeroDrag`
-   - Password: quella configurata nel setup
+4. **Accendi il device AeroDrag (ESP32)**: si collega da solo al WiFi `AeroDrag`
+   del Pi e inizia a trasmettere la telemetria su `/device`.
+   *(Il telefono dell'atleta resta accoppiato al device in **Bluetooth** e mantiene
+   la propria rete internet: NON deve entrare nel WiFi del Pi — modello v0.3.0.)*
 
-5. **Nell'app AeroDrag** → tab "Coach":
-   - URL server: `ws://192.168.8.1:8080/coach`
-   - Premi **Salva e connetti**
+5. Il dashboard si aggiorna automaticamente appena il device trasmette. Il pill
+   **BLE ✓** conferma la connessione del device.
 
-6. Il dashboard si aggiorna automaticamente. Il pill **BLE ✓** conferma la connessione.
+> **Sim senza device:** solo per test, l'app può ancora collegarsi al fallback
+> legacy `ws://192.168.8.1:8080/coach` (deprecato). In uso normale non serve.
 
 ---
 
@@ -189,7 +201,7 @@ Dopo il riavvio (attendere 30 secondi) il Pi è pronto.
 | Interfaccia | Pi | Dispositivi |
 |---|---|---|
 | USB → PC coach | 192.168.7.1 | PC: 192.168.7.2 (DHCP) |
-| WiFi → iPhone | 192.168.8.1 | iPhone: 192.168.8.10-50 (DHCP) |
+| WiFi → device ESP32 | 192.168.8.1 | ESP32: 192.168.8.10-50 (DHCP) |
 
 ---
 
@@ -204,9 +216,13 @@ Dopo il riavvio (attendere 30 secondi) il Pi è pronto.
 - Verifica che il Pi sia connesso: `ping 192.168.7.1`
 - Verifica il servizio: `ssh pi@192.168.7.1 "sudo systemctl status aerodrag"`
 
-**L'app non si connette al server**
-- Verifica che il telefono sia connesso al WiFi "AeroDrag"
-- Verifica che l'URL nell'app sia esattamente `ws://192.168.8.1:8080/coach`
+**La dashboard resta "in attesa del device"**
+- Verifica che il **device AeroDrag (ESP32)** sia acceso e connesso al WiFi `AeroDrag`
+  del Pi (è lui l'uplink su `/device`, non il telefono).
+- Il telefono va accoppiato al device in **Bluetooth** (app `aerodrag-new`); non deve
+  entrare nel WiFi del Pi.
+- Diagnostica sul Pi: `sudo journalctl -u aerodrag -f` → all'accensione del device deve
+  comparire `[device] connesso` / `device_connected`.
 
 **Riavvio forzato del server**
 ```bash
