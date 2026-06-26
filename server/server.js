@@ -239,6 +239,16 @@ const httpServer = http.createServer((req, res) => {
     } catch { res.writeHead(500); return res.end('dashboard.html mancante'); }
   }
 
+  // JS della dashboard servito come file esterno (contract v0.3.1 CO-1: la
+  // dashboard è "inline-free" → il coach può togliere 'unsafe-inline' dalla CSP).
+  if (url === '/dashboard.js') {
+    try {
+      const js = fs.readFileSync(path.join(__dirname, 'dashboard.js'));
+      res.writeHead(200, { 'Content-Type':'application/javascript; charset=utf-8' });
+      return res.end(js);
+    } catch { res.writeHead(404); return res.end('dashboard.js mancante'); }
+  }
+
   if (url === '/status') {
     const pending = pendingLoad();
     const athletes = [...deviceWsMap.values()].map(s => ({ deviceId:s.deviceId, athleteName:s.athleteName }));
