@@ -74,7 +74,7 @@ function ingest(f, live) {
   const lp = laps[lap];
   lp.n++; lp.sumCdA+=f.CdA; lp.sumPwr+=(f.pwr||0);
   lp.sumSpd+=(f.spd||0); lp.sumHr+=(f.hr||0);
-  const paero = Math.round((f.pwr||0)*(f.pctAero||76)/100);
+  const paero = Math.round((f.pwr||0)*(Number.isFinite(f.pctAero) ? f.pctAero : 76)/100);
   lp.sumAero+=paero; lp.sumWind+=(f.wind||0); lp.sumCad+=(f.cad||0);
   lp.pts.push({s:(f.t-lp.startTs)/1000, CdA:f.CdA, pwr:f.pwr||0, hr:f.hr||0,
                spd:f.spd||0, wind:f.wind||0, aero:paero, cad:f.cad||0});
@@ -156,7 +156,7 @@ function updateUI(f, paero, lap) {
   $('#av-pwr').textContent = sess.avPwr;
   $('#pk-aero').textContent= sess.pkAero;
   $('#av-aero').textContent= sess.avAero;
-  $('#pct-aero').textContent= (f.pctAero||76)+'%';
+  $('#pct-aero').textContent= (Number.isFinite(f.pctAero) ? f.pctAero : 76)+'%';
   $('#pk-hr').textContent  = sess.pkHr;
   $('#av-hr').textContent  = sess.avHr;
 
@@ -170,7 +170,7 @@ function updateUI(f, paero, lap) {
   $('#r-frames').textContent   = sess.frames;
 
   // Power breakdown
-  const pctA = f.pctAero||76, pctR = Math.max(0, Math.round((f.pwr>0?(f.pwr-paero)/f.pwr*100:0)));
+  const pctA = Number.isFinite(f.pctAero) ? f.pctAero : 76, pctR = Math.max(0, Math.round((f.pwr>0?(f.pwr-paero)/f.pwr*100:0)));
   document.getElementById('pwr-breakdown').innerHTML = [
     ['Aerodinamica', pctA, '#f5a623'],
     ['Rolling',      pctR, '#4d9fff'],
