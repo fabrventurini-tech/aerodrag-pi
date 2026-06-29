@@ -3,14 +3,17 @@
  * Gestisce sessioni separate per device ID.
  * Ogni device si identifica con { device: "AA:BB:CC:DD:EE:FF", athlete: "Mario" }
  *
- * Contract: v0.3.0 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
- *   Frame telemetria atteso a 2 Hz; pctAero in percentuale 0-100;
+ * Contract: v0.3.4 — fonte di verità in aerodrag-firmware/docs/CONTRACT.md
+ *   Frame telemetria atteso a 2 Hz; pctAero INTERO 0-100 (v0.3.3 errata);
  *   campi pitch/rho/lapEvent presenti nel frame e registrati nelle sessioni.
  *   §3: `device` obbligatorio e MAC-valido → frame senza identità rifiutati
  *   all'ingestione. §5: filename sessione sempre session_{ts}_{deviceIdHex}.json.
  *   v0.3.0: /device è l'uplink primario (ESP32); /coach resta accettato come
  *   fallback legacy DEPRECATO (non rimuovere). Frame `tUtc` (epoch UTC) additivo:
  *   il `ts` di sessione deriva da tUtc se >0, altrimenti dal tempo del Pi.
+ *   v0.3.1→v0.3.4: nessun impatto sul wire del Pi. v0.3.1 audit (pc-receiver:
+ *   bind USB + validazione schema), v0.3.2/v0.3.3 errata doc, v0.3.4 sicurezza
+ *   confine G (firmware↔wheel, 0xBB00) — non riguarda il gateway.
  */
 
 const http = require('http');
